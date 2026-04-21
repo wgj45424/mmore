@@ -1,4 +1,4 @@
-name: 🐳 Publish Docker Images on GHCR
+name: 🐳 buildTar
 
 on:
   push:
@@ -6,29 +6,34 @@ on:
       - master
   workflow_dispatch:
     inputs:
-      build_type:
-        description: '选择要构建的镜像类型'
-        required: true
-        default: 'both'
-        type: choice
-        options:
-          - both      # 构建 CPU 和 GPU
-          - cpu       # 只构建 CPU
-          - gpu       # 只构建 GPU
-          - student   # 构建学生版 GPU 镜像
+      build_cpu:
+        description: '构建 CPU 镜像'
+        required: false
+        default: true
+        type: boolean
+      build_gpu:
+        description: '构建 GPU 镜像'
+        required: false
+        default: true
+        type: boolean
+      build_student:
+        description: '构建学生版 GPU 镜像（自定义 UID/GID）'
+        required: false
+        default: false
+        type: boolean
       user_uid:
-        description: 'User UID (仅 student 模式需要)'
+        description: 'User UID (仅学生版需要)'
         required: false
         default: '1000'
       user_gid:
-        description: 'Group GID (仅 student 模式需要)'
+        description: 'Group GID (仅学生版需要)'
         required: false
         default: '1000'
 
 jobs:
   # 学生镜像 Job
   publish-student-image:
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_type == 'student'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_student == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -74,11 +79,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # 普通镜像 Job（支持手动触发）
+  # 普通镜像 Job（CPU/GPU）
   publish-github-container:
     if: |
       github.event_name == 'push' || 
-      (github.event_name == 'workflow_dispatch' && (github.event.inputs.build_type == 'both' || github.event.inputs.build_type == 'cpu' || github.event.inputs.build_type == 'gpu'))
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.build_cpu == 'true' || github.event.inputs.build_gpu == 'true'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -87,10 +92,10 @@ jobs:
     strategy:
       matrix:
         device: ${{ fromJson(
-          github.event_name == 'push' && '["cpu", "gpu"]' ||
-          (github.event.inputs.build_type == 'both' && '["cpu", "gpu"]') ||
-          (github.event.inputs.build_type == 'cpu' && '["cpu"]') ||
-          (github.event.inputs.build_type == 'gpu' && '["gpu"]')
+          (github.event_name == 'push' && '["cpu", "gpu"]') ||
+          (github.event.inputs.build_cpu == 'true' && github.event.inputs.build_gpu == 'true' && '["cpu", "gpu"]') ||
+          (github.event.inputs.build_cpu == 'true' && '["cpu"]') ||
+          (github.event.inputs.build_gpu == 'true' && '["gpu"]')
         ) }}
 
     steps:
