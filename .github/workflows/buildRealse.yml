@@ -1,0 +1,92 @@
+name: 🐳 buildRealse
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      build_cpu:
+        description: '构建 CPU 镜像'
+        required: false
+        default: true
+        type: boolean
+      build_gpu:
+        description: '构建 GPU 镜像'
+        required: false
+        default: true
+        type: boolean
+      build_student:
+        description: '构建学生版 GPU 镜像（自定义 UID/GID）'
+        required: false
+        default: false
+        type: boolean
+      user_uid:
+        description: 'User UID (仅学生版需要)'
+        required: false
+        default: '1000'
+      user_gid:
+        description: 'Group GID (仅学生版需要)'
+        required: false
+        default: '1000'
+
+jobs:
+  # 学生镜像 Job - 保存为文件并上传
+  build-student-image:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_student == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/ubuntu/Dockerfile
+          push: false
+          load: true  # 加载到本地，以便保存
+          platforms: linux/amd64
+          tags: mmore:student-uid${{ inputs.user_uid }}-gid${{ inputs.user_gid }}-gpu
+          build-args: |
+            DEVICE=gpu
+            USER_UID=${{ inputs.user_uid }}
+            USER_GID=${{ inputs.user_gid }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save Docker image to file
+        run: |
+          docker save mmore:student-uid${{ inputs.user_uid }}-gid${{ inputs.user_gid }}-gpu -o mmore-student.tar
+          gzip -c mmore-student.tar > mmore-student.tar.gz
+          rm mmore-student.tar
+          echo "FILE_NAME=mmore-student.tar.gz" >> $GITHUB_ENV
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: DockerImages-${{ github.run_number }}
+          name: "Docker Images Build #${{ github.run_number }}"
+          body: |
+            ### 构建的镜像
+            
+            **学生版 GPU 镜像**
+            - 镜像标签: `mmore:student-uid${{ inputs.user_uid }}-gid${{ inputs.user_gid }}-gpu`
+            - UID: ${{ inputs.user_uid }}
+            - GID: ${{ inputs.user_gid }}
+            
+            ### 使用方法
+            ```bash
+            # 下载后解压并加载
+            gunzip -c mmore-student.tar.gz | docker load
+            # 或直接
+            docker load -i mmore-student.tar.gz
