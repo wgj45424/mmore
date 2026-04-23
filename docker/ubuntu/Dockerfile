@@ -50,20 +50,26 @@ RUN .venv/bin/uv sync --frozen --no-install-project ${UV_ARGUMENTS}
 COPY --chown=mmoreuser:mmoreuser . /app
 RUN .venv/bin/uv pip install --no-cache --no-deps -e .
 
+# ============================================
+# 预下载模型（移到 ENTRYPOINT 之前）
+# ============================================
+ARG PREDOWNLOAD_MODEL=sentence-transformers/all-MiniLM-L6-v2
+ARG HF_ENDPOINT=https://hf-mirror.com
+
+ENV HF_ENDPOINT=${HF_ENDPOINT}
+
+RUN .venv/bin/python -c "from sentence_transformers import SentenceTransformer; \
+    print(f'Downloading model: ${PREDOWNLOAD_MODEL}'); \
+    model = SentenceTransformer('${PREDOWNLOAD_MODEL}'); \
+    print('Model downloaded successfully')"
+
 # --- Runtime ---
 ENV PATH="/app/.venv/bin:$PATH"
 ENV DASK_DISTRIBUTED__WORKER__DAEMON=False
 
-ENTRYPOINT ["/bin/bash"]
-# 接收模型参数
-ARG PREDOWNLOAD_MODEL=sentence-transformers/all-MiniLM-L6-v2
-ARG HF_ENDPOINT=https://hf-mirror.com
-
-# 设置镜像站并预下载模型
-ENV HF_ENDPOINT=${HF_ENDPOINT}
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${PREDOWNLOAD_MODEL}')"
-
-# 设置离线模式
+# 设置离线模式环境变量
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
 ENV HF_DATASETS_OFFLINE=1
+
+ENTRYPOINT ["/bin/bash"]
