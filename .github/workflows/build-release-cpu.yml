@@ -1,4 +1,4 @@
-name: Build and Release CPU Docker Image
+name: 🐳 Build and Release CPU Docker Image
 
 on:
   push:
@@ -10,92 +10,214 @@ on:
         description: 'Release version (e.g., 1.0.0)'
         required: true
         default: 'latest'
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+      user_uid:
+        description: 'User UID (default: 1000)'
+        required: false
+        default: '1000'
+      user_gid:
+        description: 'Group GID (default: 1000)'
+        required: false
+        default: '1000'
 
 jobs:
-  build-and-release:
+  build-and-release-cpu:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
-    
+
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-        with:
-          platforms: linux/amd64,linux/arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for Docker
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building version: $VERSION"
+
+      - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},suffix=-cpu
-            type=semver,pattern={{major}}.{{minor}},suffix=-cpu
-            type=raw,value=latest-cpu,enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version == 'latest' }}
-            type=raw,value=${{ github.event.inputs.version }}-cpu,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=raw,value=${{ steps.version.outputs.version }}-cpu
+            type=raw,value=latest-cpu
 
-      - name: Build and push Docker image
+      - name: Build & push CPU image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./docker/ubuntu/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          file: docker/ubuntu/Dockerfile
           push: true
-          build-args: |
-            DEVICE=cpu
-            UV_OVERRIDE=--extra all,cpu
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            DEVICE=cpu
+            USER_UID=${{ github.event.inputs.user_uid || '1000' }}
+            USER_GID=${{ github.event.inputs.user_gid || '1000' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Save Docker image as tar file
+      - name: Create release directory
         run: |
           mkdir -p release-artifacts
-          VERSION_TAG="${{ steps.meta.outputs.version }}"
-          if [ -z "$VERSION_TAG" ]; then
-            VERSION_TAG="${{ github.event.inputs.version }}"
-          fi
-          
-          # Pull and save for both architectures
-          docker pull --platform linux/amd64 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION_TAG}-cpu
-          docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION_TAG}-cpu | gzip > release-artifacts/mmcore-${VERSION_TAG}-cpu-amd64.tar.gz
-          
-          docker pull --platform linux/arm64 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION_TAG}-cpu
-          docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION_TAG}-cpu | gzip > release-artifacts/mmcore-${VERSION_TAG}-cpu-arm64.tar.gz
+          VERSION="${{ steps.version.outputs.version }}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Pull and save AMD64 image
+        run: |
+          VERSION="${{ env.VERSION }}"
+          docker pull --platform linux/amd64 ghcr.io/${{ github.repository }}:${VERSION}-cpu
+          docker save ghcr.io/${{ github.repository }}:${VERSION}-cpu | gzip > release-artifacts/mmcore-${VERSION}-cpu-amd64.tar.gz
+          echo "AMD64_SIZE=$(du -h release-artifacts/mmcore-${VERSION}-cpu-amd64.tar.gz | cut -f1)" >> $GITHUB_ENV
+
+      - name: Pull and save ARM64 image
+        run: |
+          VERSION="${{ env.VERSION }}"
+          docker pull --platform linux/arm64 ghcr.io/${{ github.repository }}:${VERSION}-cpu
+          docker save ghcr.io/${{ github.repository }}:${VERSION}-cpu | gzip > release-artifacts/mmcore-${VERSION}-cpu-arm64.tar.gz
+          echo "ARM64_SIZE=$(du -h release-artifacts/mmcore-${VERSION}-cpu-arm64.tar.gz | cut -f1)" >> $GITHUB_ENV
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release-artifacts
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Generate release notes
         run: |
-          cat > release-artifacts/RELEASE_NOTES.md << 'EOF'
-          # MMCore CPU Docker Image ${{ steps.meta.outputs.version || github.event.inputs.version }}
+          VERSION="${{ env.VERSION }}"
+          BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
           
+          cat > release-artifacts/RELEASE_NOTES.md << EOF
+          # MMCore CPU Docker Image v${VERSION}
+
           ## 📦 Overview
           CPU-only Docker image for MMCore based on Ubuntu 22.04.
-          
+
           ## 🖥️ Supported Platforms
-          - `linux/amd64` - x86_64 servers (e.g., Intel/AMD processors)
-          - `linux/arm64` - ARM64 machines (e.g., AWS Graviton, Apple Silicon)
-          
-          ## 🚀 Usage
-          
+          - **linux/amd64** - x86_64 servers (Intel/AMD processors)
+          - **linux/arm64** - ARM64 machines (AWS Graviton, Apple Silicon)
+
+          ## 📥 Download Options
+
           ### Option 1: Pull from GitHub Container Registry
-          ```bash
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version || github.event.inputs.version }}-cpu
+          \`\`\`bash
+          docker pull ghcr.io/${{ github.repository }}:${VERSION}-cpu
+          docker pull ghcr.io/${{ github.repository }}:latest-cpu
+          \`\`\`
+
+          ### Option 2: Download offline archives
+          | Architecture | File | Size |
+          |-------------|------|------|
+          | AMD64 | mmcore-${VERSION}-cpu-amd64.tar.gz | ${{ env.AMD64_SIZE }} |
+          | ARM64 | mmcore-${VERSION}-cpu-arm64.tar.gz | ${{ env.ARM64_SIZE }} |
+
+          ## 🚀 Quick Start
+
+          ### Using Docker Hub
+          \`\`\`bash
+          docker run -it \\
+            -v ./examples:/app/examples \\
+            -v ./.cache:/mmoreuser/.cache \\
+            ghcr.io/${{ github.repository }}:${VERSION}-cpu
+          \`\`\`
+
+          ### Using offline archive
+          \`\`\`bash
+          # For x86_64 systems
+          gunzip -c mmcore-${VERSION}-cpu-amd64.tar.gz | docker load
+          docker run -it ghcr.io/${{ github.repository }}:${VERSION}-cpu
+
+          # For ARM64 systems
+          gunzip -c mmcore-${VERSION}-cpu-arm64.tar.gz | docker load
+          docker run -it ghcr.io/${{ github.repository }}:${VERSION}-cpu
+          \`\`\`
+
+          ### Build from source
+          \`\`\`bash
+          sudo docker build -f docker/ubuntu/Dockerfile \\
+            --build-arg DEVICE=cpu \\
+            -t mmore:cpu .
+          \`\`\`
+
+          ## 🔧 Build Information
+          - **Version**: ${VERSION}
+          - **Build Date**: ${BUILD_DATE}
+          - **Git Commit**: [\`${{ github.sha }}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
+          - **Build Arguments**:
+            - \`DEVICE=cpu\`
+            - \`USER_UID=${{ github.event.inputs.user_uid || '1000' }}\`
+            - \`USER_GID=${{ github.event.inputs.user_gid || '1000' }}\`
+
+          ## 📝 File Checksums
+          \`\`\`
+          $(cat release-artifacts/SHA256SUMS.txt)
+          \`\`\`
+
+          ## 🐛 Issues
+          If you encounter any problems, please report them at:
+          https://github.com/${{ github.repository }}/issues
+          EOF
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.version.outputs.version) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || format('Release v{0} - CPU', steps.version.outputs.version) }}
+          body_path: release-artifacts/RELEASE_NOTES.md
+          files: |
+            release-artifacts/*.tar.gz
+            release-artifacts/SHA256SUMS.txt
+          draft: false
+          prerelease: ${{ steps.version.outputs.version == 'latest' }}
+          fail_on_unmatched_files: true
+
+      - name: Upload artifacts to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: mmcore-cpu-${{ steps.version.outputs.version }}
+          path: |
+            release-artifacts/*.tar.gz
+            release-artifacts/SHA256SUMS.txt
+          retention-days: 30
+          compression-level: 0
+
+      - name: Summary
+        run: |
+          echo "## ✅ Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Images Published**: $(echo '${{ steps.meta.outputs.tags }}' | tr '\n' ' ')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Artifacts**:" >> $GITHUB_STEP_SUMMARY
+          echo "- AMD64: ${{ env.AMD64_SIZE }}" >> $GITHUB_STEP_SUMMARY
+          echo "- ARM64: ${{ env.ARM64_SIZE }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Pull Command**:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}-cpu" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
