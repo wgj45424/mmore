@@ -53,7 +53,7 @@ jobs:
             type=raw,value=${{ github.event.inputs.version }}-cpu,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./docker/ubuntu/Dockerfile
@@ -84,77 +84,18 @@ jobs:
 
       - name: Generate release notes
         run: |
-          cat > release-artifacts/RELEASE_NOTES.md << EOF
+          cat > release-artifacts/RELEASE_NOTES.md << 'EOF'
           # MMCore CPU Docker Image ${{ steps.meta.outputs.version || github.event.inputs.version }}
           
-          ## Overview
+          ## 📦 Overview
           CPU-only Docker image for MMCore based on Ubuntu 22.04.
           
-          ## Supported Platforms
-          - linux/amd64 (x86_64 servers)
-          - linux/arm64 (ARM64 machines, Apple Silicon)
+          ## 🖥️ Supported Platforms
+          - `linux/amd64` - x86_64 servers (e.g., Intel/AMD processors)
+          - `linux/arm64` - ARM64 machines (e.g., AWS Graviton, Apple Silicon)
           
-          ## Usage
+          ## 🚀 Usage
           
-          ### Pull from GHCR
-          \`\`\`bash
+          ### Option 1: Pull from GitHub Container Registry
+          ```bash
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version || github.event.inputs.version }}-cpu
-          \`\`\`
-          
-          ### Run Container
-          \`\`\`bash
-          docker run -it \\
-            -v ./examples:/app/examples \\
-            -v ./.cache:/mmoreuser/.cache \\
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version || github.event.inputs.version }}-cpu
-          \`\`\`
-          
-          ### Load from tar.gz (without internet)
-          \`\`\`bash
-          # For AMD64
-          gunzip -c mmcore-${{ steps.meta.outputs.version || github.event.inputs.version }}-cpu-amd64.tar.gz | docker load
-          
-          # For ARM64
-          gunzip -c mmcore-${{ steps.meta.outputs.version || github.event.inputs.version }}-cpu-arm64.tar.gz | docker load
-          \`\`\`
-          
-          ## Build Information
-          - Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          - GitHub SHA: ${{ github.sha }}
-          - Build Arguments:
-            - DEVICE=cpu
-            - UV_OVERRIDE=--extra all,cpu
-          
-          EOF
-
-      - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            release-artifacts/*.tar.gz
-            release-artifacts/RELEASE_NOTES.md
-          body_path: release-artifacts/RELEASE_NOTES.md
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-
-      - name: Create Manual Release
-        if: github.event_name == 'workflow_dispatch'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ github.event.inputs.version }}
-          name: Release v${{ github.event.inputs.version }} (CPU)
-          files: |
-            release-artifacts/*.tar.gz
-            release-artifacts/RELEASE_NOTES.md
-          body_path: release-artifacts/RELEASE_NOTES.md
-          draft: false
-          prerelease: false
-
-      - name: Upload artifacts to workflow run
-        uses: actions/upload-artifact@v3
-        with:
-          name: cpu-docker-images
-          path: release-artifacts/
-          retention-days: 30
