@@ -1,49 +1,36 @@
-name: 🐳 Build & Export CPU Docker Image + Upload to Release
-
+name: Build CPU Image & Export Tar to Release
 on:
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 jobs:
-  build-export-upload:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: read
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      # 1. 安装 Docker 环境
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
+      - name: Set up Docker
         uses: docker/setup-buildx-action@v3
 
-      # 2. 构建 CPU 镜像（不推送，只本地构建）
-      - name: Build CPU only image
+      # 构建并输出镜像文件（直接输出 tar，不用 docker save）
+      - name: Build and export CPU image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/ubuntu/Dockerfile
-          push: false
-          platforms: linux/amd64
-          tags: mmore-cpu:latest
+          outputs: type=docker,dest=mmore-cpu-amd64.tar
+          tags: mmore:cpu
           build-args: |
             DEVICE=cpu
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          platforms: linux/amd64
 
-      # 3. 导出镜像为 .tar 文件（你要的离线包）
-      - name: Export Docker image to tar
-        run: |
-          docker save -o mmore-cpu-amd64.tar mmore-cpu:latest
-
-      # 4. 上传 tar 到 GitHub Release
-      - name: Upload to Release
+      # 上传到 Release
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: mmore-cpu-amd64.tar
-          tag_name: cpu-docker-image  # 发布标签名
+          tag_name: cpu-docker-tar
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
