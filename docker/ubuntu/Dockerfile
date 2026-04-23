@@ -55,3 +55,15 @@ ENV PATH="/app/.venv/bin:$PATH"
 ENV DASK_DISTRIBUTED__WORKER__DAEMON=False
 
 ENTRYPOINT ["/bin/bash"]
+# 接收模型参数
+ARG PREDOWNLOAD_MODEL=sentence-transformers/all-MiniLM-L6-v2
+ARG HF_ENDPOINT=https://hf-mirror.com
+
+# 设置镜像站并预下载模型
+ENV HF_ENDPOINT=${HF_ENDPOINT}
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${PREDOWNLOAD_MODEL}')"
+
+# 设置离线模式
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+ENV HF_DATASETS_OFFLINE=1
