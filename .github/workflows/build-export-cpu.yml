@@ -1,4 +1,5 @@
-name: Build CPU Image & Export Tar to Release
+name: Build CPU API Image & Upload to Release
+
 on:
   workflow_dispatch:
 
@@ -11,25 +12,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Docker
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 只构建 linux/amd64 架构（你的服务器能跑）
-      - name: Build and export CPU image
+      # 正确构建：安装 mmore + 支持 API
+      - name: Build and export
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/ubuntu/Dockerfile
-          outputs: type=docker,dest=mmore-cpu-amd64.tar
-          tags: mmore:cpu
-          build-args: DEVICE=cpu
-          # 关键：只构建 amd64
+          outputs: type=docker,dest=mmore-cpu-api.tar
+          tags: mmore-cpu-api:latest
+          build-args: |
+            DEVICE=cpu
           platforms: linux/amd64
 
-      - name: Upload to GitHub Release
+      # 上传到 Release
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mmore-cpu-amd64.tar
-          tag_name: cpu-docker-tar-amd64
+          files: mmore-cpu-api.tar
+          tag_name: cpu-api-final
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
