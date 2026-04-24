@@ -15,7 +15,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 构建镜像（Dockerfile 内部自动处理模型，无外部下载）
+      # 下载 mmore 必需的 3 个核心模型
+      - name: Download required models
+        run: |
+          mkdir -p models
+          wget -q --no-check-certificate https://huggingface.co/MBZUAI/mmore/resolve/main/mmore_final_checkpoint.pth -P models/
+          wget -q --no-check-certificate https://huggingface.co/MBZUAI/GeoLlama-7B-v1/resolve/main/config.json -P models/
+          wget -q --no-check-certificate https://huggingface.co/MBZUAI/GeoLlama-7B-v1/resolve/main/generation_config.json -P models/
+          ls -lh models/
+
+      # 构建镜像（自动把 models 文件夹打包进镜像）
       - name: Build and export
         uses: docker/build-push-action@v6
         with:
@@ -27,7 +36,6 @@ jobs:
             DEVICE=cpu
           platforms: linux/amd64
 
-      # 上传到 Release（已修复正确 action）
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
