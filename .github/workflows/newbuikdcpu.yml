@@ -24,7 +24,6 @@ jobs:
       - name: Prepare model cache directory
         run: mkdir -p ./model_cache
 
-      # 只下载核心嵌入模型，不再下载 docling-models
       - name: Download required models
         run: |
           pip install --no-cache-dir huggingface_hub sentence-transformers
@@ -50,24 +49,41 @@ jobs:
           build-args: |
             MODEL_CACHE_DIR=./model_cache
 
-      - name: Save and compress Docker image
+      - name: Save, compress and split Docker image
         run: |
           docker save mmore-offline:latest | gzip > mmore-offline.tar.gz
-          echo "Image size: $(du -h mmore-offline.tar.gz | cut -f1)"
+          echo "Full image size: $(du -h mmore-offline.tar.gz | cut -f1)"
+          
+          # 分卷切割，每卷 1800MB (留安全余量，确保单卷 < 2GB)
+          split -b 1800M -d mmore-offline.tar.gz mmore-offline.tar.gz.part
+          rm mmore-offline.tar.gz
+          
+          echo "Generated parts:"
+          ls -lh mmore-offline.tar.gz.part*
+          
+          # 生成校验文件，方便验证下载完整性
+          sha256sum mmore-offline.tar.gz.part* > checksums.txt
 
-      # 若镜像仍大于2GB，可启用分割逻辑（默认注释掉）
-      # - name: Split image if too large
-      #   run: |
-      #     if [ $(stat -c%s mmore-offline.tar.gz) -gt 2147483648 ]; then
-      #       split -b 1800M -d mmore-offline.tar.gz mmore-offline.tar.gz.part
-      #       rm mmore-offline.tar.gz
-      #     fi
-
-      - name: Upload to Release
+      - name: Upload parts to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.event.inputs.version }}
-          files: |
-            mmore-offline.tar.gz*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          body: |
+            ## MMORE 离线 Docker 镜像（CPU, amd64）
+            
+            ### 📦 下载说明
+            本镜像采用分卷压缩，请下载所有 `.part*` 文件及 `checksums.txt`。
+            
+            ### 🔧 合并与导入
+            ```bash
+            # 1. 校验文件完整性（可选）
+            sha256sum -c checksums.txt
+            
+            # 2. 合并分卷
+            cat mmore-offline.tar.gz.part* > mmore-offline.tar.gz
+            
+            # 3. 导入 Docker
+            gunzip -c mmore-offline.tar.gz | docker load
+            
+            # 4. 运行
+            docker run -d --name mmore --network host mmore-offline:latest
