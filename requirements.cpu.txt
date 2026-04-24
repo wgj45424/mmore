@@ -1,7 +1,7 @@
 torch --index-url https://download.pytorch.org/whl/cpu
 torchvision --index-url https://download.pytorch.org/whl/cpu
 sentence-transformers
-docling
+# docling
 # easyocr
 # paddleocr 可能需要 paddlepaddle，按需取消注释
 # paddlepaddle
