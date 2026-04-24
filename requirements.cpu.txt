@@ -1,0 +1,13 @@
+torch --index-url https://download.pytorch.org/whl/cpu
+torchvision --index-url https://download.pytorch.org/whl/cpu
+sentence-transformers
+docling
+# easyocr
+# paddleocr 可能需要 paddlepaddle，按需取消注释
+# paddlepaddle
+# 其他 MMORE 依赖
+transformers
+accelerate
+huggingface_hub
+gradio
+# 等等，按项目实际补全
