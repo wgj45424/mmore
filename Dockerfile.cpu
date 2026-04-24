@@ -1,0 +1,52 @@
+FROM python:3.11-slim-bookworm AS builder
+
+# 安装系统依赖（支持 PDF/图片处理）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    wget \
+    # Docling 需要的 PDF/Office 工具
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    libreoffice \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Python 依赖（CPU 版 PyTorch）
+COPY requirements.cpu.txt .
+RUN pip install --no-cache-dir -r requirements.cpu.txt
+
+# ---- 正式镜像 ----
+FROM builder AS final
+
+# 设置 HuggingFace 缓存路径，指向拷贝进来的模型目录
+ENV HF_HOME=/app/models \
+    TRANSFORMERS_CACHE=/app/models \
+    SENTENCE_TRANSFORMERS_HOME=/app/models \
+    TORCH_HOME=/app/models/torch \
+    EASYOCR_MODULE_PATH=/app/models/easyocr \
+    PADDLEOCR_HOME=/app/models/paddleocr
+
+# 将预下载的模型拷贝进镜像
+ARG MODEL_CACHE_DIR=./model_cache
+COPY ${MODEL_CACHE_DIR} /app/models/
+
+# 复制项目代码
+COPY . /app
+WORKDIR /app
+
+# 运行时的必要环境变量
+ENV PYTHONUNBUFFERED=1 \
+    GRADIO_SERVER_NAME=0.0.0.0 \
+    CUDA_VISIBLE_DEVICES=""
+
+# 暴露端口（按项目实际端口调整）
+EXPOSE 7860
+
+# 默认启动命令
+CMD ["python", "-m", "mmore"]
