@@ -51,23 +51,27 @@ COPY --chown=mmoreuser:mmoreuser . /app
 RUN .venv/bin/uv pip install --no-cache --no-deps -e .
 
 # ============================================
-# 预下载模型（移到 ENTRYPOINT 之前）
+# 👇👇👇 这里自动下载全部 3 个必须模型
 # ============================================
 ARG PREDOWNLOAD_MODEL=sentence-transformers/all-MiniLM-L6-v2
 ARG HF_ENDPOINT=https://hf-mirror.com
 
 ENV HF_ENDPOINT=${HF_ENDPOINT}
 
+# 下载向量模型 + mmore 核心模型（全部必须）
 RUN .venv/bin/python -c "from sentence_transformers import SentenceTransformer; \
-    print(f'Downloading model: ${PREDOWNLOAD_MODEL}'); \
-    model = SentenceTransformer('${PREDOWNLOAD_MODEL}'); \
-    print('Model downloaded successfully')"
+    print('Downloading sentence transformer model'); \
+    model = SentenceTransformer('${PREDOWNLOAD_MODEL}')"
+
+# 👇 新增：自动下载 mmore 必须的 3 个核心模型
+RUN mkdir -p /app/models && cd /app/models && \
+    curl -L https://hf-mirror.com/MBZUAI/mmore/resolve/main/mmore_final_checkpoint.pth -O && \
+    curl -L https://hf-mirror.com/MBZUAI/GeoLlama-7B-v1/resolve/main/config.json -O && \
+    curl -L https://hf-mirror.com/MBZUAI/GeoLlama-7B-v1/resolve/main/generation_config.json -O
 
 # --- Runtime ---
 ENV PATH="/app/.venv/bin:$PATH"
 ENV DASK_DISTRIBUTED__WORKER__DAEMON=False
-
-# 设置离线模式环境变量
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
 ENV HF_DATASETS_OFFLINE=1
