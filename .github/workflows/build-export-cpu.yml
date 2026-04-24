@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # 必须权限，用于创建/上传 Release
+      contents: write
 
     steps:
       - uses: actions/checkout@v6
@@ -15,17 +15,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 下载 mmore 项目必需模型（保证开箱即用）
-      - name: Download required models
-        run: |
-          mkdir -p models
-          # 官方必需基础模型（适配 mmore 项目）
-          wget -q https://huggingface.co/MBZUAI/GeoLlama-7B-v1/resolve/main/pytorch_model.bin -O models/geollama_model.bin
-          wget -q https://huggingface.co/MBZUAI/GeoLlama-7B-v1/resolve/main/config.json -O models/config.json
-          ls -lh models/
-
-      # 构建 CPU + API 镜像（内置模型）
-      - name: Build and export Docker image
+      # 构建镜像（Dockerfile 内部自动处理模型，无外部下载）
+      - name: Build and export
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -36,12 +27,12 @@ jobs:
             DEVICE=cpu
           platforms: linux/amd64
 
-      # ✅ 修复：正确的 Action 名称，无报错
-      - name: Upload image to GitHub Release
+      # 上传到 Release（已修复正确 action）
+      - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           files: mmore-cpu-api.tar
           tag_name: cpu-api-final
-          make_latest: true  # 设为最新版本
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
