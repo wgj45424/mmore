@@ -24,19 +24,18 @@ jobs:
       - name: Prepare model cache directory
         run: mkdir -p ./model_cache
 
+      # 只下载核心嵌入模型，不再下载 docling-models
       - name: Download required models
         run: |
-          pip install --no-cache-dir huggingface_hub sentence-transformers docling
+          pip install --no-cache-dir huggingface_hub sentence-transformers
           python -c "
-          import os
           from huggingface_hub import snapshot_download
-          
           cache_dir = './model_cache'
-          snapshot_download('ds4sd/docling-models', cache_dir=cache_dir,
-                            force_download=True, resume_download=False)
-          snapshot_download('sentence-transformers/all-MiniLM-L6-v2', cache_dir=cache_dir,
-                            force_download=True, resume_download=False)
-          print('Models downloaded successfully.')
+          snapshot_download('sentence-transformers/all-MiniLM-L6-v2',
+                            cache_dir=cache_dir,
+                            force_download=True,
+                            resume_download=False)
+          print('All-MiniLM-L6-v2 downloaded.')
           "
 
       - name: Build Docker image
@@ -52,13 +51,23 @@ jobs:
             MODEL_CACHE_DIR=./model_cache
 
       - name: Save and compress Docker image
-        run: docker save mmore-offline:latest | gzip > mmore-offline.tar.gz
+        run: |
+          docker save mmore-offline:latest | gzip > mmore-offline.tar.gz
+          echo "Image size: $(du -h mmore-offline.tar.gz | cut -f1)"
+
+      # 若镜像仍大于2GB，可启用分割逻辑（默认注释掉）
+      # - name: Split image if too large
+      #   run: |
+      #     if [ $(stat -c%s mmore-offline.tar.gz) -gt 2147483648 ]; then
+      #       split -b 1800M -d mmore-offline.tar.gz mmore-offline.tar.gz.part
+      #       rm mmore-offline.tar.gz
+      #     fi
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.event.inputs.version }}
           files: |
-            mmore-offline.tar.gz
+            mmore-offline.tar.gz*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
