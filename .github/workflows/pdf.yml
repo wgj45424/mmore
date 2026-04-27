@@ -24,41 +24,41 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write          # 用于创建 Release 和上传附件
-      packages: write          # 可选，如果需要推送到 GHCR
+      contents: write
+      packages: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 不使用 uv，直接用系统 pip 下载模型
-      - name: Download Hugging Face models
+      - name: Download Hugging Face models (using hf)
         run: |
           mkdir -p ${{ env.HF_HOME }}/hub
           python -m pip install --upgrade pip
-          python -m pip install huggingface_hub hf_xet
-          export HF_ENDPOINT=https://hf-mirror.com   # 可选，国内加速
+          python -m pip install huggingface_hub
+          # 可选：使用镜像加速
+          export HF_ENDPOINT=https://hf-mirror.com
           
           echo "Downloading surya_layout..."
-          huggingface-cli download datalab-to/surya_layout --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--surya_layout/snapshots/v1
+          hf download datalab-to/surya_layout --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--surya_layout/snapshots/v1
           
           echo "Downloading texify..."
-          huggingface-cli download datalab-to/texify --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--texify/snapshots/v1
+          hf download datalab-to/texify --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--texify/snapshots/v1
           
           echo "Downloading surya_rec2..."
-          huggingface-cli download vikp/surya_rec2 --local-dir ${{ env.HF_HOME }}/hub/models--vikp--surya_rec2/snapshots/v1
+          hf download vikp/surya_rec2 --local-dir ${{ env.HF_HOME }}/hub/models--vikp--surya_rec2/snapshots/v1
           
           echo "Downloading surya_det3..."
-          huggingface-cli download vikp/surya_det3 --local-dir ${{ env.HF_HOME }}/hub/models--vikp--surya_det3/snapshots/v1
+          hf download vikp/surya_det3 --local-dir ${{ env.HF_HOME }}/hub/models--vikp--surya_det3/snapshots/v1
           
           echo "Downloading surya_tablerec..."
-          huggingface-cli download vikp/surya_tablerec --local-dir ${{ env.HF_HOME }}/hub/models--vikp--surya_tablerec/snapshots/v1
+          hf download vikp/surya_tablerec --local-dir ${{ env.HF_HOME }}/hub/models--vikp--surya_tablerec/snapshots/v1
           
           echo "Downloading ocr_error_detection..."
-          huggingface-cli download datalab-to/ocr_error_detection --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--ocr_error_detection/snapshots/v1
+          hf download datalab-to/ocr_error_detection --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--ocr_error_detection/snapshots/v1
           
           echo "Downloading inline_math_detection..."
-          huggingface-cli download datalab-to/inline_math_detection --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--inline_math_detection/snapshots/v1 || echo "Optional model not found, skipping"
+          hf download datalab-to/inline_math_detection --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--inline_math_detection/snapshots/v1 || echo "Optional model not found, skipping"
           
           echo "Model download completed."
 
@@ -70,7 +70,6 @@ jobs:
           VERSION=${{ github.event.inputs.version }}
           DOCKER_TAG="${IMAGE_NAME}:${VERSION}"
           
-          # 创建自定义 Dockerfile，将所有模型缓存复制进镜像
           cat > Dockerfile.custom << 'EOF'
           ARG DEVICE=cpu
           ARG UV_OVERRIDE="--extra all,cpu"
@@ -87,16 +86,12 @@ jobs:
           
           WORKDIR /app
           
-          # 复制依赖文件
           COPY pyproject.toml uv.lock /app/
           RUN python3.11 -m venv .venv && \
               .venv/bin/pip install --no-cache-dir uv && \
               .venv/bin/uv sync --frozen --no-install-project ${UV_OVERRIDE}
           
-          # 复制项目源码
           COPY . /app
-          
-          # 复制提前下载好的 Hugging Face 模型缓存（从构建上下文 hf_cache 来）
           COPY --from=hf_cache / /root/.cache/huggingface
           
           RUN .venv/bin/uv pip install --no-cache --no-deps -e .
@@ -108,7 +103,6 @@ jobs:
           ENTRYPOINT ["/bin/bash"]
           EOF
           
-          # 构建镜像，将下载好的模型目录作为构建上下文传入（--build-context）
           docker buildx build \
             --platform ${{ env.PLATFORM }} \
             -f Dockerfile.custom \
@@ -119,7 +113,6 @@ jobs:
             --load \
             .
           
-          # 保存为 tar
           docker save ${DOCKER_TAG} -o ${IMAGE_NAME}.tar
           
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
