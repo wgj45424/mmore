@@ -126,18 +126,27 @@ jobs:
             FILE_SIZE=$(stat -c%s "$TAR_FILE")
             MAX_SIZE=$((2 * 1024 * 1024 * 1024))
             if [ $FILE_SIZE -gt $MAX_SIZE ]; then
-              echo "File size ${FILE_SIZE} exceeds 2GB, splitting into 2GB parts..."
-              split -b 2G "$TAR_FILE" "${TAR_FILE}.part"
+              echo "File size ${FILE_SIZE} exceeds 2GB, splitting into 2047MB parts..."
+              # 使用 2047M 确保每个分片小于 2GB (2048M = 2GB exactly, sometimes overshoot)
+              split -b 2047M "$TAR_FILE" "${TAR_FILE}.part"
               rm "$TAR_FILE"
               cat > merge.sh << 'MERGE_SCRIPT'
           #!/bin/bash
           SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
           cd "$SCRIPT_DIR"
           echo "Merging split files..."
-          cat "${TAR_FILE}.part"* > "${TAR_FILE}"
-          echo "Merge completed. Load with: docker load -i ${TAR_FILE}"
+          # 确定目标文件名：如果环境变量 TAR_FILE 存在则使用，否则默认为 mmore-cpu.tar
+          if [ -n "${TAR_FILE}" ]; then
+            TARGET="${TAR_FILE}"
+          else
+            TARGET="mmore-cpu.tar"
+          fi
+          cat "${TARGET}.part"* > "${TARGET}"
+          echo "Merge completed. Load with: docker load -i ${TARGET}"
           MERGE_SCRIPT
               chmod +x merge.sh
+              # 替换脚本中的 TAR_FILE 变量为实际文件名
+              sed -i "s|\${TAR_FILE}|${TAR_FILE}|g" merge.sh
               echo "SPLIT=true" >> $GITHUB_ENV
               echo "ASSET_PATTERN=${TAR_FILE}.part*" >> $GITHUB_ENV
             else
