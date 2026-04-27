@@ -31,16 +31,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      # 下载所有必需的 Hugging Face 模型（在构建机上下载，再打包进镜像）
+      # 不使用 uv，直接用系统 pip 下载模型
       - name: Download Hugging Face models
         run: |
           mkdir -p ${{ env.HF_HOME }}/hub
-          uv pip install huggingface_hub hf_xet
-          # 加速镜像（可选）
-          export HF_ENDPOINT=https://hf-mirror.com
+          python -m pip install --upgrade pip
+          python -m pip install huggingface_hub hf_xet
+          export HF_ENDPOINT=https://hf-mirror.com   # 可选，国内加速
           
           echo "Downloading surya_layout..."
           huggingface-cli download datalab-to/surya_layout --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--surya_layout/snapshots/v1
@@ -68,12 +65,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image
+      - name: Build Docker image (with offline models)
         run: |
           VERSION=${{ github.event.inputs.version }}
           DOCKER_TAG="${IMAGE_NAME}:${VERSION}"
           
-          # 创建自定义 Dockerfile（包含离线模型缓存）
+          # 创建自定义 Dockerfile，将所有模型缓存复制进镜像
           cat > Dockerfile.custom << 'EOF'
           ARG DEVICE=cpu
           ARG UV_OVERRIDE="--extra all,cpu"
@@ -90,22 +87,28 @@ jobs:
           
           WORKDIR /app
           
+          # 复制依赖文件
           COPY pyproject.toml uv.lock /app/
           RUN python3.11 -m venv .venv && \
               .venv/bin/pip install --no-cache-dir uv && \
               .venv/bin/uv sync --frozen --no-install-project ${UV_OVERRIDE}
           
+          # 复制项目源码
           COPY . /app
-          COPY /hf_cache /root/.cache/huggingface
+          
+          # 复制提前下载好的 Hugging Face 模型缓存（从构建上下文 hf_cache 来）
+          COPY --from=hf_cache / /root/.cache/huggingface
           
           RUN .venv/bin/uv pip install --no-cache --no-deps -e .
           
           ENV PATH="/app/.venv/bin:$PATH"
           ENV HF_HOME=/root/.cache/huggingface
           ENV HF_HUB_OFFLINE=1
+          ENV TRANSFORMERS_OFFLINE=1
           ENTRYPOINT ["/bin/bash"]
           EOF
           
+          # 构建镜像，将下载好的模型目录作为构建上下文传入（--build-context）
           docker buildx build \
             --platform ${{ env.PLATFORM }} \
             -f Dockerfile.custom \
@@ -116,6 +119,7 @@ jobs:
             --load \
             .
           
+          # 保存为 tar
           docker save ${DOCKER_TAG} -o ${IMAGE_NAME}.tar
           
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
