@@ -17,7 +17,6 @@ on:
 env:
   IMAGE_NAME: mmore-cpu
   PLATFORM: linux/amd64
-  DEVICE_TYPE: cpu
 
 jobs:
   build-and-release:
@@ -34,7 +33,6 @@ jobs:
           df -h /
           
           echo "=== 开始清理 ==="
-          # 删除所有不需要的预装软件
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
@@ -52,14 +50,9 @@ jobs:
           sudo rm -rf /usr/local/share/gecko_driver
           sudo rm -rf /imagegeneration
           
-          # 清理 apt 缓存
           sudo apt-get clean
           sudo apt-get autoremove -y
-          
-          # 清理 Docker
           docker system prune -af --volumes || true
-          
-          # 清理临时文件
           sudo rm -rf /tmp/*
           sudo rm -rf /var/tmp/*
           
@@ -69,84 +62,100 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ============ 第2步：下载模型（使用临时目录） ============
+      # ============ 第2步：下载模型（使用 Python 脚本代替 hf 命令） ============
       - name: Download Hugging Face models
         run: |
-          # 使用 runner 临时空间
-          export HF_HOME=/tmp/hf_cache
+          export HF_HOME=$(pwd)/hf_cache
           mkdir -p $HF_HOME/hub
           
           python -m pip install --upgrade pip
           python -m pip install huggingface_hub
-          export HF_ENDPOINT=https://hf-mirror.com
           
-          echo "=== 下载 surya_layout ==="
-          huggingface-cli download datalab-to/surya_layout \
-            --local-dir $HF_HOME/hub/models--datalab-to--surya_layout \
-            --local-dir-use-symlinks False
+          # 使用 Python 脚本下载，避免 hf 命令兼容性问题
+          python3 << 'PYEOF'
+          import os
+          import sys
+          from huggingface_hub import snapshot_download
           
-          echo "=== 下载 texify ==="
-          huggingface-cli download datalab-to/texify \
-            --local-dir $HF_HOME/hub/models--datalab-to--texify \
-            --local-dir-use-symlinks False
+          # 设置镜像加速
+          os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
           
-          echo "=== 下载 surya_rec2 ==="
-          huggingface-cli download vikp/surya_rec2 \
-            --local-dir $HF_HOME/hub/models--vikp--surya_rec2 \
-            --local-dir-use-symlinks False
+          cache_dir = os.path.join(os.getcwd(), 'hf_cache', 'hub')
           
-          echo "=== 下载 surya_det3 ==="
-          huggingface-cli download vikp/surya_det3 \
-            --local-dir $HF_HOME/hub/models--vikp--surya_det3 \
-            --local-dir-use-symlinks False
+          models = [
+              "datalab-to/surya_layout",
+              "datalab-to/texify",
+              "vikp/surya_rec2",
+              "vikp/surya_det3",
+              "vikp/surya_tablerec",
+              "datalab-to/ocr_error_detection",
+              "datalab-to/inline_math_detection",
+              "sentence-transformers/all-MiniLM-L6-v2",
+          ]
           
-          echo "=== 下载 surya_tablerec ==="
-          huggingface-cli download vikp/surya_tablerec \
-            --local-dir $HF_HOME/hub/models--vikp--surya_tablerec \
-            --local-dir-use-symlinks False
+          success_count = 0
+          for model in models:
+              try:
+                  print(f"\n{'='*60}")
+                  print(f"下载: {model}")
+                  print(f"{'='*60}")
+                  snapshot_download(
+                      model,
+                      cache_dir=cache_dir,
+                      local_files_only=False,
+                      resume_download=True,
+                      force_download=False,
+                  )
+                  print(f"✓ {model} 下载成功")
+                  success_count += 1
+              except Exception as e:
+                  print(f"✗ {model} 下载失败: {e}")
+                  if model == "datalab-to/inline_math_detection":
+                      print("  (可选模型，跳过)")
+                  else:
+                      sys.exit(1)
           
-          echo "=== 下载 ocr_error_detection ==="
-          huggingface-cli download datalab-to/ocr_error_detection \
-            --local-dir $HF_HOME/hub/models--datalab-to--ocr_error_detection \
-            --local-dir-use-symlinks False
+          print(f"\n{'='*60}")
+          print(f"下载完成: {success_count}/{len(models)} 个模型")
+          print(f"{'='*60}")
+          PYEOF
           
-          echo "=== 下载 inline_math_detection ==="
-          huggingface-cli download datalab-to/inline_math_detection \
-            --local-dir $HF_HOME/hub/models--datalab-to--inline_math_detection \
-            --local-dir-use-symlinks False || echo "Optional model, skipping"
+          # 创建 latest 软链接
+          echo "=== 创建 latest 软链接 ==="
+          cd hf_cache/hub
+          for model_dir in models--*; do
+            if [ -d "$model_dir" ]; then
+              snapshot_dir=$(ls -dt $model_dir/snapshots/*/ 2>/dev/null | head -1)
+              if [ -n "$snapshot_dir" ]; then
+                snapshot_name=$(basename $snapshot_dir)
+                ln -sfn ../snapshots/$snapshot_name $model_dir/latest
+                echo "  ✓ $model_dir -> latest -> $snapshot_name"
+              else
+                echo "  ⚠ $model_dir: 未找到 snapshot"
+              fi
+            fi
+          done
+          cd ../..
           
-          echo "=== 下载 all-MiniLM-L6-v2 ==="
-          huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 \
-            --local-dir $HF_HOME/hub/models--sentence-transformers--all-MiniLM-L6-v2 \
-            --local-dir-use-symlinks False
+          echo "=== 模型缓存大小 ==="
+          du -sh hf_cache/
           
-          echo "=== 模型下载完成 ==="
-          du -sh $HF_HOME/
-          
-          # 打包模型，减少文件数量
-          tar -czf /tmp/hf_models.tar.gz -C $HF_HOME .
-          echo "模型压缩包大小: $(du -h /tmp/hf_models.tar.gz | cut -f1)"
+          echo "=== 模型列表 ==="
+          ls -la hf_cache/hub/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # ============ 第3步：构建镜像（优化大小） ============
+      # ============ 第3步：构建镜像 ============
       - name: Build Docker image
         run: |
           VERSION=${{ github.event.inputs.version }}
           DOCKER_TAG="${IMAGE_NAME}:${VERSION}"
           
-          # 解压模型到构建上下文
-          mkdir -p ./hf_models
-          tar -xzf /tmp/hf_models.tar.gz -C ./hf_models
-          rm /tmp/hf_models.tar.gz  # 释放空间
-          
-          # 创建优化的 Dockerfile
           cat > Dockerfile.custom << 'DOCKERFILE_EOF'
-          # syntax=docker/dockerfile:1
           FROM ubuntu:22.04
           
-          # 合并所有 RUN 层以减少镜像大小
+          # 安装系统依赖
           RUN apt-get update && \
               DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
               python3.11 python3.11-venv python3.11-dev python3-pip \
@@ -182,13 +191,41 @@ jobs:
               PYTHONUNBUFFERED=1 \
               CUDA_VISIBLE_DEVICES=""
           
-          # 复制模型（单独一层，方便复用缓存）
-          COPY ./hf_models/ /opt/huggingface/
+          # 复制预下载的模型
+          COPY ./hf_cache/ /opt/huggingface/
           
-          # 创建入口和测试脚本
-          RUN echo '#!/bin/bash\nset -e\necho "=== MMORE Container Started ==="\necho "Python: $(python3 --version)"\necho "PyTorch: $(python3 -c \"import torch; print(torch.__version__)\")"\necho "Models cached: $(ls /opt/huggingface/hub/ 2>/dev/null | wc -l)"\nexec "$@"' > /entrypoint.sh && \
-              chmod +x /entrypoint.sh && \
-              cat > /app/run_rag.py << 'PYEOF'
+          # 验证模型
+          RUN echo "=== 验证模型结构 ===" && \
+              echo "模型目录:" && ls /opt/huggingface/hub/ && \
+              echo "" && \
+              echo "latest 链接:" && \
+              for d in /opt/huggingface/hub/models--*/; do \
+                name=$(basename $d); \
+                if [ -L "$d/latest" ]; then \
+                  echo "  ✓ $name -> $(readlink $d/latest)"; \
+                else \
+                  echo "  ✗ $name (缺少 latest 链接!)"; \
+                  snapshot_dir=$(ls -dt $d/snapshots/*/ 2>/dev/null | head -1); \
+                  if [ -n "$snapshot_dir" ]; then \
+                    ln -sfn ../snapshots/$(basename $snapshot_dir) $d/latest; \
+                    echo "    已自动修复"; \
+                  fi; \
+                fi; \
+              done
+          
+          # 创建入口脚本
+          RUN echo '#!/bin/bash' > /entrypoint.sh && \
+              echo 'set -e' >> /entrypoint.sh && \
+              echo 'echo "=== MMORE Container Started ==="' >> /entrypoint.sh && \
+              echo 'echo "Python: $(python3 --version)"' >> /entrypoint.sh && \
+              echo 'echo "PyTorch: $(python3 -c \"import torch; print(torch.__version__)\")"' >> /entrypoint.sh && \
+              echo 'echo "Models cached: $(ls /opt/huggingface/hub/models--* 2>/dev/null | wc -l)"' >> /entrypoint.sh && \
+              echo 'echo "Offline mode: HF_HUB_OFFLINE=$HF_HUB_OFFLINE"' >> /entrypoint.sh && \
+              echo 'exec "$@"' >> /entrypoint.sh && \
+              chmod +x /entrypoint.sh
+          
+          # 创建 RAG 测试脚本
+          RUN cat > /app/run_rag.py << 'PYEOF'
           #!/opt/venv/bin/python3
           """MMORE RAG 离线测试脚本"""
           import os, sys
@@ -200,6 +237,7 @@ jobs:
           
           print(f"\n[1] 离线模式:")
           print(f"    HF_HUB_OFFLINE = {os.environ.get('HF_HUB_OFFLINE')}")
+          print(f"    TRANSFORMERS_OFFLINE = {os.environ.get('TRANSFORMERS_OFFLINE')}")
           
           print(f"\n[2] 模型缓存:")
           cache_dir = Path(os.environ.get('HF_HOME', '/opt/huggingface'))
@@ -208,7 +246,12 @@ jobs:
               models = list(hub_dir.glob('models--*'))
               print(f"    找到 {len(models)} 个模型:")
               for m in sorted(models):
-                  print(f"    - {m.name}")
+                  latest = m / 'latest'
+                  status = '✓' if latest.exists() else '✗ (缺少链接)'
+                  print(f"    {status} {m.name}")
+          else:
+              print(f"    ✗ 缓存目录不存在: {hub_dir}")
+              sys.exit(1)
           
           print(f"\n[3] 导入测试:")
           try:
@@ -227,38 +270,23 @@ jobs:
               embeddings = model.encode(["测试文本", "Test document"])
               print(f"    ✓ 嵌入编码成功, shape: {embeddings.shape}")
           except Exception as e:
-              print(f"    ⚠ {e}")
+              print(f"    ✗ 嵌入模型失败: {e}")
           
-          print(f"\n[5] RAG 流程测试:")
-          rag_dir = Path("/tmp/rag_test")
-          rag_dir.mkdir(exist_ok=True)
+          print(f"\n[5] MMORE 组件测试:")
           
-          test_file = rag_dir / "doc.md"
-          test_file.write_text("""# MMORE Framework
-          
-          MMORE (Multimodal Retrieval-Augmented Generation) supports:
-          
-          - PDF processing with layout analysis
-          - Word documents
-          - Image OCR with surya models
-          - Offline deployment
-          
-          ## Usage
-          
-          ```python
-          from mmore import process, rag
-          # Process documents and build search index
-          ```""")
-          
-          print(f"    测试文档已创建: {test_file}")
-          
-          # 尝试处理文档
           try:
               from mmore.process import DocumentProcessor
-              processor = DocumentProcessor()
+              proc = DocumentProcessor()
               print(f"    ✓ DocumentProcessor 初始化成功")
           except Exception as e:
               print(f"    ⚠ DocumentProcessor: {e}")
+          
+          try:
+              from mmore.index import IndexBuilder
+              builder = IndexBuilder()
+              print(f"    ✓ IndexBuilder 初始化成功")
+          except Exception as e:
+              print(f"    ⚠ IndexBuilder: {e}")
           
           try:
               from mmore.rag import Retriever
@@ -268,8 +296,7 @@ jobs:
               print(f"    ⚠ Retriever: {e}")
           
           print(f"\n{'=' * 60}")
-          print("测试完成！容器就绪。")
-          print(f"运行: docker run --rm -it mmore-cpu bash")
+          print("测试完成！")
           print(f"{'=' * 60}")
           PYEOF
           
@@ -291,13 +318,20 @@ jobs:
           echo "=== 镜像信息 ==="
           docker images ${DOCKER_TAG}
           
-          # 清理构建上下文
-          rm -rf ./hf_models
+          # 快速验证
+          echo "=== 快速验证 ==="
+          docker run --rm ${DOCKER_TAG} python3 -c "
+          import os
+          os.environ['HF_HUB_OFFLINE']='1'
+          from sentence_transformers import SentenceTransformer
+          m = SentenceTransformer('all-MiniLM-L6-v2')
+          print('✓ 模型加载测试通过')
+          "
           
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "DOCKER_TAG=${DOCKER_TAG}" >> $GITHUB_ENV
 
-      # ============ 第4步：用 gzip 管道直接压缩导出（节省空间） ============
+      # ============ 第4步：导出并压缩 ============
       - name: Export and compress image
         run: |
           echo "=== 当前磁盘空间 ==="
@@ -306,15 +340,14 @@ jobs:
           DOCKER_TAG="${{ env.DOCKER_TAG }}"
           VERSION="${{ env.VERSION }}"
           
-          # 直接 docker save + gzip，不保留中间的 tar 文件
+          # 管道直接压缩，不保留中间 tar
           echo "=== 导出并压缩镜像 ==="
           docker save ${DOCKER_TAG} | gzip -1 > ${IMAGE_NAME}-${VERSION}.tar.gz
           
-          echo "=== 压缩包大小 ==="
+          echo "=== 压缩包信息 ==="
           ls -lh ${IMAGE_NAME}-${VERSION}.tar.gz
           
-          # 删除原始镜像以释放空间
-          echo "=== 删除原始镜像释放空间 ==="
+          # 释放空间
           docker rmi ${DOCKER_TAG} || true
           docker system prune -af --volumes || true
           
@@ -323,17 +356,19 @@ jobs:
           
           echo "TAR_FILE=${IMAGE_NAME}-${VERSION}.tar.gz" >> $GITHUB_ENV
 
-      # ============ 第5步：分割大文件 ============
+      # ============ 第5步：分卷（如需） ============
       - name: Split file if exceeds 2GB
+        id: split
         run: |
           TAR_FILE="${{ env.TAR_FILE }}"
+          VERSION="${{ env.VERSION }}"
           
           if [ ! -f "$TAR_FILE" ]; then
             echo "错误：找不到文件 $TAR_FILE"
             exit 1
           fi
           
-          FILE_SIZE=$(stat -c%s "$TAR_FILE")
+          FILE_SIZE=$(stat -c%s "$TAR_FILE" 2>/dev/null || stat -f%z "$TAR_FILE" 2>/dev/null)
           MAX_SIZE=$((2 * 1024 * 1024 * 1024))
           echo "文件大小: $(($FILE_SIZE / 1024 / 1024 / 1024)) GB ($FILE_SIZE bytes)"
           
@@ -342,41 +377,54 @@ jobs:
             split -b 1900M -d "$TAR_FILE" "${TAR_FILE}.part"
             rm "$TAR_FILE"
             
-            # 创建合并脚本
-            cat > merge.sh << 'MERGEEOF'
+            # 创建合并导入脚本
+            cat > merge.sh << MERGEEOF
           #!/bin/bash
           set -e
-          PARTS=$(ls FILE_NAME_PLACEHOLDER.part* 2>/dev/null | sort -V)
-          if [ -z "$PARTS" ]; then
-              echo "错误：未找到分卷文件 FILE_NAME_PLACEHOLDER.part*"
-              exit 1
+          
+          SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+          cd "\$SCRIPT_DIR"
+          
+          echo "================================================"
+          echo "  MMORE CPU/AMD64 Docker 镜像合并导入脚本"
+          echo "  版本: ${VERSION}"
+          echo "================================================"
+          
+          FILE_NAME="${IMAGE_NAME}-${VERSION}.tar.gz"
+          PARTS=\$(ls \${FILE_NAME}.part* 2>/dev/null | sort -V)
+          
+          if [ -z "\$PARTS" ]; then
+            echo "错误：未找到分卷文件 \${FILE_NAME}.part*"
+            echo "请确保所有分卷文件在同一目录"
+            exit 1
           fi
-          echo "找到 $(echo "$PARTS" | wc -l) 个分卷文件"
+          
+          PART_COUNT=\$(echo "\$PARTS" | wc -l)
+          echo "找到 \${PART_COUNT} 个分卷文件"
+          
+          echo ""
           echo "正在合并..."
-          cat $PARTS > FILE_NAME_PLACEHOLDER
-          echo "合并完成！"
+          cat \$PARTS > "\${FILE_NAME}"
+          
+          echo "合并完成！文件大小: \$(du -h \${FILE_NAME} | cut -f1)"
           echo ""
           echo "导入镜像："
-          echo "  gunzip -c FILE_NAME_PLACEHOLDER | docker load"
+          echo "  gunzip -c \${FILE_NAME} | docker load"
           echo ""
           echo "运行容器："
-          echo "  docker run --rm -it mmore-cpu:VERSION_PLACEHOLDER"
+          echo "  docker run --rm -it ${IMAGE_NAME}:${VERSION}"
           echo ""
           echo "运行 RAG 测试："
-          echo "  docker run --rm mmore-cpu:VERSION_PLACEHOLDER python3 /app/run_rag.py"
+          echo "  docker run --rm ${IMAGE_NAME}:${VERSION} python3 /app/run_rag.py"
+          echo "================================================"
           MERGEEOF
             
-            sed -i "s/FILE_NAME_PLACEHOLDER/${IMAGE_NAME}-${VERSION}.tar.gz/g" merge.sh
-            sed -i "s/VERSION_PLACEHOLDER/${{ env.VERSION }}/g" merge.sh
             chmod +x merge.sh
-            
             echo "分卷数量: $(ls ${TAR_FILE}.part* | wc -l)"
-            echo "SPLIT=true" >> $GITHUB_ENV
-            echo "ASSET_FILES=${TAR_FILE}.part* merge.sh" >> $GITHUB_ENV
+            echo "split=true" >> $GITHUB_OUTPUT
           else
             echo "文件大小在限制内，无需分卷"
-            echo "SPLIT=false" >> $GITHUB_ENV
-            echo "ASSET_FILES=${TAR_FILE}" >> $GITHUB_ENV
+            echo "split=false" >> $GITHUB_OUTPUT
           fi
 
       # ============ 第6步：创建 Release ============
@@ -386,35 +434,40 @@ jobs:
           tag_name: ${{ github.event.inputs.version }}
           name: ${{ github.event.inputs.release_title }}
           body: |
-            ## MMORE CPU/AMD64 离线 Docker 镜像 ${{ github.event.inputs.version }}
+            ## MMORE CPU/AMD64 离线 Docker 镜像
+            
+            **版本**: ${{ github.event.inputs.version }}
+            **架构**: amd64 (x86_64) 
+            **设备**: CPU only
             
             ### 📦 包含内容
+            
+            #### 功能模块
             - ✅ 完整 MMORE 包 (process, index, rag)
             - ✅ CPU 优化版 PyTorch
-            - ✅ 所有 Hugging Face 模型:
-              - `datalab-to/surya_layout` - 文档布局分析
-              - `datalab-to/texify` - 公式识别
-              - `vikp/surya_rec2` - 文本识别
-              - `vikp/surya_det3` - 文本检测
-              - `vikp/surya_tablerec` - 表格识别
-              - `datalab-to/ocr_error_detection` - OCR纠错
-              - `sentence-transformers/all-MiniLM-L6-v2` - 嵌入模型
-            - ✅ 预配置离线模式 (HF_HUB_OFFLINE=1)
-            - ✅ 中文 OCR 支持
+            - ✅ 预配置离线模式
             
-            ### 📥 下载与使用
+            #### 内置模型 (8个)
+            | 模型 | 用途 |
+            |------|------|
+            | surya_layout | 文档布局分析 |
+            | surya_det3 | 文本行检测 |
+            | surya_rec2 | 文字识别 (OCR) |
+            | surya_tablerec | 表格结构识别 |
+            | texify | 数学公式识别 |
+            | ocr_error_detection | OCR 纠错 |
+            | inline_math_detection | 行内公式检测 |
+            | all-MiniLM-L6-v2 | 嵌入向量化 (RAG) |
             
-            ${{ env.SPLIT == 'true' && '#### 分卷文件使用' || '' }}
+            ### 📥 使用说明
             
+            ${{ steps.split.outputs.split == 'true' && '#### 步骤1：下载并合并分卷' || '' }}
+            ${{ steps.split.outputs.split == 'true' && '```bash' || '' }}
+            ${{ steps.split.outputs.split == 'true' && '# 下载所有 .part* 文件和 merge.sh 到同一目录' || '' }}
+            ${{ steps.split.outputs.split == 'true' && 'chmod +x merge.sh' || '' }}
+            ${{ steps.split.outputs.split == 'true' && './merge.sh' || '' }}
+            ${{ steps.split.outputs.split == 'true' && '```' || '' }}
+            
+            #### 导入镜像
             ```bash
-            ${{ env.SPLIT == 'true' && '# 1. 下载所有 part 文件和 merge.sh' || '#' }}
-            ${{ env.SPLIT == 'true' && 'chmod +x merge.sh && ./merge.sh' || '' }}
-            
-            # 导入镜像
             gunzip -c mmore-cpu-${{ github.event.inputs.version }}.tar.gz | docker load
-            
-            # 运行容器
-            docker run --rm -it mmore-cpu:${{ github.event.inputs.version }}
-            
-            # RAG 测试
-            docker run --rm mmore-cpu:${{ github.event.inputs.version }} python3 /app/run_rag.py
