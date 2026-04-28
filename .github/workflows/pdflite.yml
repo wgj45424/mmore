@@ -1,0 +1,322 @@
+name: Manual2.1 Build and Release MMORE (CPU/AMD64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+        type: string
+      release_title:
+        description: 'Release title'
+        required: false
+        default: 'MMORE CPU/AMD64 Release'
+        type: string
+      pip_index:
+        description: 'Pip index URL (leave empty for default)'
+        required: false
+        default: 'https://pypi.tuna.tsinghua.edu.cn/simple'
+        type: string
+
+env:
+  IMAGE_NAME: mmore-cpu
+  PLATFORM: linux/amd64
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      # ============ 1. 清理磁盘空间 ============
+      - name: Maximize disk space
+        run: |
+          echo "=== 初始磁盘空间 ==="
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
+          sudo rm -rf /usr/local/share/boost /usr/local/share/chromium
+          sudo rm -rf /usr/local/share/powershell /usr/share/swift
+          sudo rm -rf /usr/local/julia /opt/microsoft /opt/pipx
+          sudo rm -rf /usr/local/graalvm /imagegeneration
+          sudo rm -rf /usr/local/share/edge_driver /usr/local/share/gecko_driver
+          sudo apt-get clean && sudo apt-get autoremove -y
+          docker system prune -af --volumes || true
+          sudo rm -rf /tmp/* /var/tmp/*
+          echo "=== 清理后磁盘空间 ==="
+          df -h /
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ============ 2. 只下载必须离线的 HF 模型 ============
+      - name: Download Hugging Face models only
+        run: |
+          export HF_HOME=$(pwd)/hf_cache
+          mkdir -p $HF_HOME/hub
+          
+          python -m pip install --upgrade pip huggingface_hub
+          
+          python3 << 'PYEOF'
+          import os, sys
+          from huggingface_hub import snapshot_download
+          
+          os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+          cache_dir = os.path.join(os.getcwd(), 'hf_cache', 'hub')
+          
+          models = [
+              "datalab-to/surya_layout",
+              "datalab-to/texify",
+              "vikp/surya_rec2",
+              "vikp/surya_det3",
+              "vikp/surya_tablerec",
+              "datalab-to/ocr_error_detection",
+              "datalab-to/inline_math_detection",
+              "sentence-transformers/all-MiniLM-L6-v2",
+          ]
+          
+          for model in models:
+              try:
+                  print(f"下载: {model}")
+                  snapshot_download(
+                      model,
+                      cache_dir=cache_dir,
+                      local_files_only=False,
+                      resume_download=True,
+                  )
+                  print(f"  ✓ 完成")
+              except Exception as e:
+                  print(f"  ⚠ {e}")
+                  if "inline_math" not in model:
+                      sys.exit(1)
+          
+          print("所有模型下载完成")
+          PYEOF
+          
+          # 创建 latest 软链接（HF 离线模式必须）
+          cd hf_cache/hub
+          for model_dir in models--*; do
+            if [ -d "$model_dir" ]; then
+              snapshot_dir=$(ls -dt $model_dir/snapshots/*/ 2>/dev/null | head -1)
+              if [ -n "$snapshot_dir" ]; then
+                ln -sfn ../snapshots/$(basename $snapshot_dir) $model_dir/latest
+                echo "  ✓ $model_dir"
+              fi
+            fi
+          done
+          cd ../..
+          
+          echo "模型缓存大小: $(du -sh hf_cache | cut -f1)"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ============ 3. 构建镜像（系统依赖+pip在线安装） ============
+      - name: Build Docker image
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          DOCKER_TAG="${IMAGE_NAME}:${VERSION}"
+          PIP_INDEX="${{ github.event.inputs.pip_index }}"
+          
+          # 如果未指定镜像源，使用默认
+          if [ -z "$PIP_INDEX" ]; then
+            PIP_CONFIG=""
+          else
+            PIP_CONFIG="RUN mkdir -p /root/.pip && echo '[global]' > /root/.pip/pip.conf && echo 'index-url = ${PIP_INDEX}' >> /root/.pip/pip.conf && echo 'trusted-host = $(echo ${PIP_INDEX} | sed 's|https://||;s|/.*||')' >> /root/.pip/pip.conf"
+          fi
+          
+          cat > Dockerfile.custom << DOCKERFILE_EOF
+          FROM ubuntu:22.04
+          
+          # 系统依赖（apt 在线安装）
+          RUN apt-get update && \\
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \\
+              python3.11 python3.11-venv python3.11-dev python3-pip \\
+              tzdata curl wget ffmpeg libsm6 libxext6 libnss3 \\
+              libxi6 libxrandr2 libxcomposite1 libxcursor1 libxdamage1 \\
+              libxfixes3 libxrender1 libasound2 libatk1.0-0 libgtk-3-0 \\
+              libreoffice libjpeg-dev libpango-1.0-0 libpangoft2-1.0-0 \\
+              weasyprint poppler-utils tesseract-ocr tesseract-ocr-eng \\
+              tesseract-ocr-chi-sim libgl1-mesa-glx libglib2.0-0 \\
+              && apt-get clean && rm -rf /var/lib/apt/lists/*
+          
+          ${PIP_CONFIG}
+          
+          WORKDIR /app
+          COPY . /app
+          
+          # Python 依赖（pip 在线安装）
+          RUN python3.11 -m venv /opt/venv && \\
+              /opt/venv/bin/pip install --upgrade pip setuptools wheel && \\
+              /opt/venv/bin/pip install --no-cache-dir "mmore[all,cpu]"
+          
+          ENV HF_HOME=/opt/huggingface \\
+              HF_HUB_CACHE=/opt/huggingface/hub \\
+              TRANSFORMERS_CACHE=/opt/huggingface/hub \\
+              SENTENCE_TRANSFORMERS_HOME=/opt/huggingface \\
+              HF_HUB_OFFLINE=1 \\
+              TRANSFORMERS_OFFLINE=1 \\
+              PATH="/opt/venv/bin:\$PATH" \\
+              PYTHONUNBUFFERED=1 \\
+              CUDA_VISIBLE_DEVICES=""
+          
+          # 只复制离线模型（不含任何 pip 包）
+          COPY ./hf_cache/ /opt/huggingface/
+          
+          # 修复 latest 链接（防御性）
+          RUN cd /opt/huggingface/hub && \\
+              for d in models--*/; do \\
+                if [ -d "\$d" ] && [ ! -L "\$d/latest" ]; then \\
+                  snapshot_dir=\$(ls -dt \$d/snapshots/*/ 2>/dev/null | head -1); \\
+                  [ -n "\$snapshot_dir" ] && ln -sfn ../snapshots/\$(basename \$snapshot_dir) \$d/latest; \\
+                fi; \\
+              done
+          
+          # 验证模型
+          RUN echo "=== 模型验证 ===" && \\
+              echo "模型数量: \$(ls /opt/huggingface/hub/models--* 2>/dev/null | wc -l)" && \\
+              python3 -c "\\
+          import os; os.environ['HF_HUB_OFFLINE']='1';\\
+          from sentence_transformers import SentenceTransformer;\\
+          SentenceTransformer('all-MiniLM-L6-v2');\\
+          print('✓ 嵌入模型验证通过')"
+          
+          # 入口脚本
+          RUN echo '#!/bin/bash' > /entrypoint.sh && \\
+              echo 'set -e' >> /entrypoint.sh && \\
+              echo 'echo "=== MMORE CPU Container ==="' >> /entrypoint.sh && \\
+              echo 'echo "Python: \$(python3 --version)"' >> /entrypoint.sh && \\
+              echo 'echo "PyTorch: \$(python3 -c \"import torch; print(torch.__version__)\")"' >> /entrypoint.sh && \\
+              echo 'echo "Offline: HF_HUB_OFFLINE=\$HF_HUB_OFFLINE"' >> /entrypoint.sh && \\
+              echo 'echo "Models: \$(ls /opt/huggingface/hub/models--* 2>/dev/null | wc -l) cached"' >> /entrypoint.sh && \\
+              echo 'exec "\$@"' >> /entrypoint.sh && \\
+              chmod +x /entrypoint.sh
+          
+          # RAG 测试脚本
+          RUN cat > /app/run_rag.py << 'PYEOF'
+          #!/opt/venv/bin/python3
+          import os, sys
+          from pathlib import Path
+          
+          print("=" * 60)
+          print("MMORE RAG Pipeline Test")
+          print("=" * 60)
+          
+          print(f"[1] 离线: HF_HUB_OFFLINE={os.environ.get('HF_HUB_OFFLINE')}")
+          
+          cache = Path(os.environ.get('HF_HOME', '/opt/huggingface')) / 'hub'
+          models = list(cache.glob('models--*')) if cache.exists() else []
+          print(f"[2] 模型: {len(models)} 个")
+          for m in sorted(models):
+              print(f"    - {m.name}")
+          
+          try:
+              import torch; print(f"[3] PyTorch {torch.__version__} ✓")
+              import mmore; print("    MMORE ✓")
+              from sentence_transformers import SentenceTransformer
+              m = SentenceTransformer('all-MiniLM-L6-v2')
+              e = m.encode(["test"])
+              print(f"    嵌入模型 ✓ shape={e.shape}")
+          except Exception as e:
+              print(f"    ✗ {e}")
+              sys.exit(1)
+          
+          print("=" * 60)
+          print("测试通过")
+          PYEOF
+          
+          RUN chmod +x /app/run_rag.py
+          
+          ENTRYPOINT ["/entrypoint.sh"]
+          CMD ["python3", "/app/run_rag.py"]
+          DOCKERFILE_EOF
+          
+          # 构建
+          echo "构建镜像..."
+          docker buildx build \
+            --platform linux/amd64 \
+            -f Dockerfile.custom \
+            -t ${DOCKER_TAG} \
+            --load \
+            .
+          
+          echo "镜像信息:"
+          docker images ${DOCKER_TAG}
+          
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "DOCKER_TAG=${DOCKER_TAG}" >> $GITHUB_ENV
+
+      # ============ 4. 导出 ============
+      - name: Export and compress
+        run: |
+          DOCKER_TAG="${{ env.DOCKER_TAG }}"
+          VERSION="${{ env.VERSION }}"
+          
+          docker save ${DOCKER_TAG} | gzip -1 > ${IMAGE_NAME}-${VERSION}.tar.gz
+          ls -lh ${IMAGE_NAME}-${VERSION}.tar.gz
+          
+          docker rmi ${DOCKER_TAG} || true
+          docker system prune -af --volumes || true
+          
+          echo "TAR_FILE=${IMAGE_NAME}-${VERSION}.tar.gz" >> $GITHUB_ENV
+
+      # ============ 5. 分卷 ============
+      - name: Split if needed
+        id: split
+        run: |
+          TAR_FILE="${{ env.TAR_FILE }}"
+          VERSION="${{ env.VERSION }}"
+          FILE_SIZE=$(stat -c%s "$TAR_FILE")
+          MAX_SIZE=$((2 * 1024 * 1024 * 1024))
+          
+          echo "文件: $(($FILE_SIZE/1024/1024/1024))GB"
+          
+          if [ $FILE_SIZE -gt $MAX_SIZE ]; then
+            split -b 1900M -d "$TAR_FILE" "${TAR_FILE}.part"
+            rm "$TAR_FILE"
+            
+            cat > merge.sh << EOF
+          #!/bin/bash
+          set -e
+          cd "\$(dirname "\$0")"
+          FILE="${IMAGE_NAME}-${VERSION}.tar.gz"
+          cat \${FILE}.part* > "\${FILE}"
+          echo "合并完成: \$(du -h \${FILE} | cut -f1)"
+          echo "导入: gunzip -c \${FILE} | docker load"
+          echo "运行: docker run --rm -it ${IMAGE_NAME}:${VERSION}"
+          EOF
+            chmod +x merge.sh
+            echo "split=true" >> $GITHUB_OUTPUT
+          else
+            echo "split=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ============ 6. Release ============
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: ${{ github.event.inputs.release_title }}
+          body: |
+            ## MMORE CPU/AMD64 离线 Docker 镜像
+            
+            **版本**: ${{ github.event.inputs.version }}
+            **架构**: amd64 (x86_64)
+            **类型**: CPU only
+            
+            ### 📦 特点
+            - 系统依赖和 Python 包: **在线安装** (镜像体积大幅减小)
+            - Hugging Face 模型 (8个): **已打包进镜像，离线可用**
+            - 总共约 **~1.6GB 模型**已固化，启动无需联网下载
+            
+            ### 📥 使用
+            
+            ${{ steps.split.outputs.split == 'true' && '**分卷文件需先合并**' || '' }}
+            
+            ```bash
+            ${{ steps.split.outputs.split == 'true' && 'chmod +x merge.sh && ./merge.sh' || '' }}
+            gunzip -c mmore-cpu-${{ github.event.inputs.version }}.tar.gz | docker load
+            docker run --rm mmore-cpu:${{ github.event.inputs.version }}
