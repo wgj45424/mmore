@@ -17,43 +17,17 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # 第1步：下载所有 HF 模型
+      # 第1步：写入 Python 下载脚本（解决 heredoc 嵌套问题）
       # ============================================================
-      - name: Download all Hugging Face models
+      - name: Write download script
         run: |
-          mkdir -p ${OUTPUT_NAME}/huggingface/hub
-          python -m pip install --upgrade pip huggingface_hub
-          python3 download_models.py
-        env:
-          HF_ENDPOINT: https://hf-mirror.com
-
-      - name: Setup and verify models
-        run: |
-          cd ${OUTPUT_NAME}/huggingface/hub
-          for model_dir in models--*; do
-            if [ -d "$model_dir" ]; then
-              snapshot_dir=$(ls -dt $model_dir/snapshots/*/ 2>/dev/null | head -1)
-              if [ -n "$snapshot_dir" ]; then
-                ln -sfn ../snapshots/$(basename $snapshot_dir) $model_dir/latest
-                echo "  OK $model_dir"
-              fi
-            fi
-          done
-          cd ../../..
-          echo "Total size: $(du -sh ${OUTPUT_NAME} | cut -f1)"
-
-      # ============================================================
-      # 第2步：写入 Python 下载脚本和 README
-      # ============================================================
-      - name: Write scripts
-        run: |
-          # 创建下载脚本（Python 文件，避免 heredoc）
           cat > download_models.py << 'PYEOF'
           import os, sys
           from huggingface_hub import snapshot_download
 
+          os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
           cache_dir = os.path.join(os.getcwd(), 'mmore-models', 'huggingface', 'hub')
-          
+
           models = [
               "datalab-to/surya_layout",
               "datalab-to/texify",
@@ -64,15 +38,44 @@ jobs:
               "datalab-to/inline_math_detection",
               "sentence-transformers/all-MiniLM-L6-v2",
           ]
-          
+
           for i, model in enumerate(models):
               print(f"[{i+1}/{len(models)}] Downloading: {model}")
               snapshot_download(model, cache_dir=cache_dir, resume_download=True)
-          
+
           print("All models downloaded.")
           PYEOF
 
-          # 创建 README（Python 文件写入，避免 heredoc）
+      # ============================================================
+      # 第2步：下载模型
+      # ============================================================
+      - name: Download Hugging Face models
+        run: |
+          mkdir -p ${OUTPUT_NAME}/huggingface/hub
+          python -m pip install --upgrade pip huggingface_hub
+          python3 download_models.py
+
+      # ============================================================
+      # 第3步：创建 latest 软链接
+      # ============================================================
+      - name: Create latest symlinks
+        run: |
+          cd ${OUTPUT_NAME}/huggingface/hub
+          for model_dir in models--*; do
+            snapshot_dir=$(ls -dt $model_dir/snapshots/*/ 2>/dev/null | head -1)
+            if [ -n "$snapshot_dir" ]; then
+              ln -sfn ../snapshots/$(basename $snapshot_dir) $model_dir/latest
+              echo "  OK $model_dir"
+            fi
+          done
+          cd ../../..
+          echo "Total size: $(du -sh ${OUTPUT_NAME} | cut -f1)"
+
+      # ============================================================
+      # 第4步：写入并执行 README 生成脚本
+      # ============================================================
+      - name: Create README
+        run: |
           cat > write_readme.py << 'PYEOF'
           lines = [
               "# MMORE Offline Models Pack",
@@ -102,14 +105,11 @@ jobs:
           ]
           with open('mmore-models/README.md', 'w') as f:
               f.write('\n'.join(lines))
-          print("README created.")
           PYEOF
-
-          # 立即执行 README 脚本
           python3 write_readme.py
 
       # ============================================================
-      # 第3步：压缩打包
+      # 第5步：打包
       # ============================================================
       - name: Package models
         run: |
@@ -117,7 +117,7 @@ jobs:
           ls -lh ${OUTPUT_NAME}.tar.gz
 
       # ============================================================
-      # 第4步：分卷
+      # 第6步：分卷（文件 > 2GB）
       # ============================================================
       - name: Split if exceeds 2GB
         id: split
@@ -125,9 +125,7 @@ jobs:
           FILE="${OUTPUT_NAME}.tar.gz"
           SIZE=$(stat -c%s "$FILE")
           MAX=$((2 * 1024 * 1024 * 1024))
-          
           echo "Size: $((SIZE / 1024 / 1024)) MB"
-          
           if [ $SIZE -gt $MAX ]; then
             split -b 1900M -d "$FILE" "${FILE}.part"
             rm "$FILE"
@@ -148,31 +146,23 @@ jobs:
           fi
 
       # ============================================================
-      # 第5步：列出文件
-      # ============================================================
-      - name: List files
-        run: |
-          echo "=== Files to upload ==="
-          ls -lh mmore-models.tar.gz* 2>/dev/null || echo "No tar.gz"
-          ls -lh merge.sh 2>/dev/null || echo "No merge.sh"
-
-      # ============================================================
-      # 第6步：上传
+      # 第7步：上传到 Release（使用 gh CLI，避免 action-gh-release 匹配失败）
       # ============================================================
       - name: Upload to Release
         run: |
           TAG="models-${{ github.run_number }}"
           
+          # 创建 Release
           gh release create "${TAG}" \
             --title "MMORE Models Pack v${{ github.run_number }}" \
             --notes "8 models (~3.1GB). Extract and mount to MMORE container."
           
+          # 上传所有文件
           for f in mmore-models.tar.gz*; do
             [ -f "$f" ] && gh release upload "${TAG}" "$f" --clobber
           done
-          
           [ -f "merge.sh" ] && gh release upload "${TAG}" "merge.sh" --clobber
           
-          echo "Done: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+          echo "Download: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
