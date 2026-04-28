@@ -80,7 +80,6 @@ jobs:
           PYEOF
           
           # 创建 latest 软链接
-          echo ""
           echo "=== 创建 latest 软链接 ==="
           cd ${OUTPUT_NAME}/huggingface/hub
           for model_dir in models--*; do
@@ -90,34 +89,27 @@ jobs:
                 snapshot_name=$(basename $snapshot_dir)
                 ln -sfn ../snapshots/$snapshot_name $model_dir/latest
                 echo "  ✓ $model_dir -> $snapshot_name"
-              else
-                echo "  ⚠ $model_dir: 未找到 snapshot"
               fi
             fi
           done
           cd ../../..
           
-          # 验证模型结构
-          echo ""
           echo "=== 验证模型结构 ==="
           for d in ${OUTPUT_NAME}/huggingface/hub/models--*/; do
             name=$(basename $d)
             if [ -L "$d/latest" ]; then
               echo "  ✓ $name"
-            else
-              echo "  ✗ $name (缺少 latest)"
             fi
           done
-          echo ""
           echo "模型总大小: $(du -sh ${OUTPUT_NAME} | cut -f1)"
 
       # ============================================================
-      # 第2步：创建 README
+      # 第2步：创建 README（用 Python 避免 heredoc 问题）
       # ============================================================
       - name: Create README
         run: |
-          cat > ${OUTPUT_NAME}/README.md << 'EOF'
-          # MMORE 离线模型包
+          python3 << 'PYEOF'
+          content = """# MMORE 离线模型包
 
           ## 包含的模型 (8个)
 
@@ -138,7 +130,7 @@ jobs:
 
           ```bash
           tar -xzf mmore-models.tar.gz
-          docker run --rm -it \
-            -v $(pwd)/mmore-models/huggingface:/opt/huggingface \
-            -e HF_HUB_OFFLINE=1 \
+          docker run --rm -it \\
+            -v $(pwd)/mmore-models/huggingface:/opt/huggingface \\
+            -e HF_HUB_OFFLINE=1 \\
             mmore-cpu:latest
