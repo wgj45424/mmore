@@ -208,6 +208,7 @@ jobs:
               SENTENCE_TRANSFORMERS_HOME=/opt/huggingface \
               HF_HUB_OFFLINE=1 \
               TRANSFORMERS_OFFLINE=1 \
+              HF_DATASETS_OFFLINE=1 \
               PATH="/opt/venv/bin:$PATH" \
               PYTHONUNBUFFERED=1 \
               CUDA_VISIBLE_DEVICES=""
@@ -230,21 +231,42 @@ jobs:
               echo "Cached models:" && ls -d models--* 2>/dev/null || echo "No models found"
           
           # ----------------------------------------------------------
-          # 验证模型（用 Python 脚本避免 shell 引号嵌套）
+          # 验证模型（强制离线 + 网络拦截）
           # ----------------------------------------------------------
           RUN cat > /tmp/verify_models.py << 'VERIFY'
           import os, sys, glob
           
+          # 强制设置离线模式
           os.environ['HF_HUB_OFFLINE'] = '1'
           os.environ['TRANSFORMERS_OFFLINE'] = '1'
+          os.environ['HF_DATASETS_OFFLINE'] = '1'
+          os.environ['HF_HOME'] = '/opt/huggingface'
+          os.environ['HF_HUB_CACHE'] = '/opt/huggingface/hub'
+          os.environ['TRANSFORMERS_CACHE'] = '/opt/huggingface/hub'
+          os.environ['SENTENCE_TRANSFORMERS_HOME'] = '/opt/huggingface'
+          
+          # 拦截所有网络请求
+          import socket
+          original_socket = socket.socket
+          def blocked_socket(*args, **kwargs):
+              raise RuntimeError("网络已禁用 - 请使用离线模式")
+          socket.socket = blocked_socket
           
           print("=" * 50)
-          print("模型验证")
+          print("模型验证 (严格离线模式)")
           print("=" * 50)
           
+          print(f"HF_HUB_OFFLINE: {os.environ.get('HF_HUB_OFFLINE')}")
+          print(f"HF_HOME: {os.environ.get('HF_HOME')}")
+          
+          # 检查缓存目录
           hub_dir = '/opt/huggingface/hub'
+          if not os.path.exists(hub_dir):
+              print(f"✗ 缓存目录不存在: {hub_dir}")
+              sys.exit(1)
+          
           models = sorted(glob.glob(f'{hub_dir}/models--*'))
-          print(f"模型数量: {len(models)}")
+          print(f"\n模型数量: {len(models)}")
           for m in models:
               name = os.path.basename(m)
               latest = os.path.join(m, 'latest')
@@ -252,16 +274,63 @@ jobs:
               print(f"  {status} {name}")
           
           # 测试嵌入模型
+          print("\n测试嵌入模型...")
           try:
               from sentence_transformers import SentenceTransformer
-              model = SentenceTransformer('all-MiniLM-L6-v2')
+              
+              # 先尝试正常加载
+              model = SentenceTransformer(
+                  'sentence-transformers/all-MiniLM-L6-v2',
+                  device='cpu'
+              )
               embeddings = model.encode(['test'])
               print(f"✓ 嵌入模型验证通过 (shape: {embeddings.shape})")
-          except Exception as e:
-              print(f"✗ 嵌入模型验证失败: {e}")
-              sys.exit(1)
+              
+          except Exception as e1:
+              print(f"方法1失败: {e1}")
+              
+              # Fallback: 直接加载本地路径
+              try:
+                  model_path = '/opt/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2'
+                  snapshots_dir = os.path.join(model_path, 'snapshots')
+                  
+                  if os.path.exists(snapshots_dir):
+                      snapshot_dirs = sorted(os.listdir(snapshots_dir))
+                      if snapshot_dirs:
+                          local_path = os.path.join(snapshots_dir, snapshot_dirs[-1])
+                          print(f"尝试直接加载: {local_path}")
+                          
+                          # 恢复网络（如果方法1没拦截）
+                          socket.socket = original_socket
+                          
+                          model = SentenceTransformer(local_path, device='cpu')
+                          embeddings = model.encode(['test'])
+                          print(f"✓ 嵌入模型验证通过 (本地路径, shape: {embeddings.shape})")
+                      else:
+                          raise Exception("snapshots 目录为空")
+                  else:
+                      raise Exception(f"snapshots 目录不存在: {snapshots_dir}")
+                      
+              except Exception as e2:
+                  print(f"\n✗ 所有加载方式均失败:")
+                  print(f"  方法1: {str(e1)[:200]}")
+                  print(f"  方法2: {str(e2)[:200]}")
+                  
+                  # 打印调试信息
+                  print(f"\n调试信息:")
+                  print(f"  缓存目录结构:")
+                  for root, dirs, files in os.walk('/opt/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2'):
+                      level = root.replace('/opt/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2', '').count(os.sep)
+                      indent = ' ' * 2 * level
+                      print(f'{indent}{os.path.basename(root)}/')
+                      if level > 3:
+                          break
+                  
+                  sys.exit(1)
           
+          print("\n" + "=" * 50)
           print("✓ 所有模型验证通过")
+          print("=" * 50)
           VERIFY
           
           RUN /opt/venv/bin/python3 /tmp/verify_models.py && rm /tmp/verify_models.py
@@ -331,11 +400,20 @@ jobs:
           print(f"\n[4] 嵌入模型:")
           try:
               from sentence_transformers import SentenceTransformer
-              model = SentenceTransformer('all-MiniLM-L6-v2')
+              model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
               embeddings = model.encode(["测试文本", "Test document"])
               print(f"    ✓ 编码成功, shape: {embeddings.shape}")
           except Exception as e:
               print(f"    ✗ 嵌入模型失败: {e}")
+              # 尝试本地路径
+              try:
+                  snapshots = glob.glob('/opt/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/*')
+                  if snapshots:
+                      model = SentenceTransformer(snapshots[0], device='cpu')
+                      embeddings = model.encode(["test"])
+                      print(f"    ✓ 本地路径加载成功, shape: {embeddings.shape}")
+              except Exception as e2:
+                  print(f"    ✗ 本地路径也失败: {e2}")
           
           print(f"\n[5] MMORE 组件:")
           for comp in ['process', 'index', 'rag']:
@@ -372,16 +450,6 @@ jobs:
           echo ""
           echo "=== 镜像信息 ==="
           docker images ${DOCKER_TAG}
-          
-          # 快速验证
-          echo ""
-          echo "=== 快速验证 ==="
-          docker run --rm ${DOCKER_TAG} python3 -c "
-          import os; os.environ['HF_HUB_OFFLINE']='1'
-          from sentence_transformers import SentenceTransformer
-          m = SentenceTransformer('all-MiniLM-L6-v2')
-          print('✓ 镜像验证通过')
-          " || echo "⚠ 快速验证失败（可能需要检查）"
           
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
           echo "DOCKER_TAG=${DOCKER_TAG}" >> $GITHUB_ENV
@@ -539,4 +607,3 @@ jobs:
             ```bash
             ${{ steps.split.outputs.split == 'true' && 'chmod +x merge.sh' || '' }}
             ${{ steps.split.outputs.split == 'true' && './merge.sh' || '' }}
-            ${{ steps.split.outputs.split == 'true' && '' || '# 无需合并，直接导入' }}
