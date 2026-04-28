@@ -1,0 +1,179 @@
+name: Download MMORE Models Only
+
+on:
+  workflow_dispatch:
+    inputs:
+      output_format:
+        description: 'Output format'
+        required: true
+        default: 'tar.gz'
+        type: choice
+        options:
+          - 'tar.gz'
+          - 'directory'
+
+env:
+  OUTPUT_NAME: mmore-models
+
+jobs:
+  download-models:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ============================================================
+      # 下载所有 HF 模型
+      # ============================================================
+      - name: Download all Hugging Face models
+        run: |
+          # 创建与 MMORE 镜像完全一致的目录结构
+          export HF_HOME=$(pwd)/${OUTPUT_NAME}/huggingface
+          mkdir -p $HF_HOME/hub
+          
+          python -m pip install --upgrade pip huggingface_hub
+          
+          python3 << 'PYEOF'
+          import os, sys
+          from huggingface_hub import snapshot_download
+          
+          # 使用镜像加速
+          os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+          
+          # 缓存目录与镜像内 /opt/huggingface/hub 结构一致
+          cache_dir = os.path.join(os.getcwd(), 'mmore-models', 'huggingface', 'hub')
+          
+          models = [
+              # 文档布局分析
+              "datalab-to/surya_layout",
+              # 公式识别
+              "datalab-to/texify",
+              # 文字识别 (OCR)
+              "vikp/surya_rec2",
+              # 文本行检测
+              "vikp/surya_det3",
+              # 表格结构识别
+              "vikp/surya_tablerec",
+              # OCR 纠错
+              "datalab-to/ocr_error_detection",
+              # 行内公式检测 (可选)
+              "datalab-to/inline_math_detection",
+              # 嵌入向量化 (RAG)
+              "sentence-transformers/all-MiniLM-L6-v2",
+          ]
+          
+          print("=" * 60)
+          print("开始下载 MMORE 所需模型")
+          print("=" * 60)
+          
+          success = 0
+          failed = []
+          
+          for model in models:
+              try:
+                  print(f"\n{'='*60}")
+                  print(f"[{success+1}/{len(models)}] 下载: {model}")
+                  print(f"{'='*60}")
+                  
+                  snapshot_download(
+                      model,
+                      cache_dir=cache_dir,
+                      local_files_only=False,
+                      resume_download=True,
+                      force_download=False,
+                  )
+                  print(f"✓ {model}")
+                  success += 1
+                  
+              except Exception as e:
+                  print(f"⚠ {model} 下载失败: {e}")
+                  if "inline_math" not in model:
+                      failed.append(model)
+                  else:
+                      print("  (可选模型，跳过)")
+          
+          print(f"\n{'='*60}")
+          print(f"下载完成: {success}/{len(models)}")
+          if failed:
+              print(f"失败模型: {failed}")
+              sys.exit(1)
+          print(f"{'='*60}")
+          PYEOF
+          
+          # ============================================================
+          # 创建 latest 软链接（HF 离线模式必须）
+          # ============================================================
+          echo ""
+          echo "=== 创建 latest 软链接 ==="
+          cd ${OUTPUT_NAME}/huggingface/hub
+          
+          for model_dir in models--*; do
+            if [ -d "$model_dir" ]; then
+              # 获取最新的 snapshot
+              snapshot_dir=$(ls -dt $model_dir/snapshots/*/ 2>/dev/null | head -1)
+              if [ -n "$snapshot_dir" ]; then
+                snapshot_name=$(basename $snapshot_dir)
+                # 创建 latest -> snapshots/xxx 软链接
+                ln -sfn ../snapshots/$snapshot_name $model_dir/latest
+                echo "  ✓ $model_dir -> latest -> $snapshot_name"
+              else
+                echo "  ⚠ $model_dir: 未找到 snapshot 目录"
+              fi
+            fi
+          done
+          
+          cd ../../..
+          
+          # ============================================================
+          # 验证模型完整性
+          # ============================================================
+          echo ""
+          echo "=== 验证模型结构 ==="
+          echo ""
+          
+          echo "模型目录:"
+          for d in ${OUTPUT_NAME}/huggingface/hub/models--*/; do
+            name=$(basename $d)
+            if [ -L "$d/latest" ]; then
+              echo "  ✓ $name"
+            else
+              echo "  ✗ $name (缺少 latest 链接!)"
+            fi
+          done
+          
+          echo ""
+          echo "模型总大小: $(du -sh ${OUTPUT_NAME} | cut -f1)"
+          
+          # 创建使用说明
+          cat > ${OUTPUT_NAME}/README.md << 'README'
+          # MMORE 离线模型包
+          
+          ## 📦 包含的模型 (8个)
+          
+          | 模型 | 用途 | 大小 |
+          |------|------|------|
+          | `datalab-to/surya_layout` | 文档布局分析 | ~200MB |
+          | `datalab-to/texify` | 公式识别 | ~400MB |
+          | `vikp/surya_rec2` | 文字识别 (OCR) | ~300MB |
+          | `vikp/surya_det3` | 文本行检测 | ~150MB |
+          | `vikp/surya_tablerec` | 表格结构识别 | ~250MB |
+          | `datalab-to/ocr_error_detection` | OCR 纠错 | ~100MB |
+          | `datalab-to/inline_math_detection` | 行内公式检测 | ~100MB |
+          | `sentence-transformers/all-MiniLM-L6-v2` | 嵌入向量化 (RAG) | ~90MB |
+          
+          ## 🚀 使用方法
+          
+          ### 方法1：挂载到 MMORE 容器
+          
+          ```bash
+          # 解压模型包
+          tar -xzf mmore-models.tar.gz
+          
+          # 挂载模型目录到容器
+          docker run --rm -it \
+            -v $(pwd)/mmore-models/huggingface:/opt/huggingface \
+            -e HF_HUB_OFFLINE=1 \
+            mmore-cpu:latest
