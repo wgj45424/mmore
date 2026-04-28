@@ -1,0 +1,183 @@
+name: Manual2.0 Build and Release MMORE (CPU/AMD64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+        type: string
+      release_title:
+        description: 'Release title'
+        required: false
+        default: 'MMORE CPU/AMD64 Release'
+        type: string
+
+env:
+  IMAGE_NAME: mmore-cpu
+  PLATFORM: linux/amd64
+  DEVICE_TYPE: cpu
+  HF_HOME: /tmp/hf_cache
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Hugging Face models (using hf)
+        run: |
+          mkdir -p ${{ env.HF_HOME }}/hub
+          python -m pip install --upgrade pip
+          python -m pip install huggingface_hub
+          # 可选：使用镜像加速
+          export HF_ENDPOINT=https://hf-mirror.com
+          
+          echo "Downloading surya_layout..."
+          hf download datalab-to/surya_layout --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--surya_layout/snapshots/v1
+          
+          echo "Downloading texify..."
+          hf download datalab-to/texify --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--texify/snapshots/v1
+          
+          echo "Downloading surya_rec2..."
+          hf download vikp/surya_rec2 --local-dir ${{ env.HF_HOME }}/hub/models--vikp--surya_rec2/snapshots/v1
+          
+          echo "Downloading surya_det3..."
+          hf download vikp/surya_det3 --local-dir ${{ env.HF_HOME }}/hub/models--vikp--surya_det3/snapshots/v1
+          
+          echo "Downloading surya_tablerec..."
+          hf download vikp/surya_tablerec --local-dir ${{ env.HF_HOME }}/hub/models--vikp--surya_tablerec/snapshots/v1
+          
+          echo "Downloading ocr_error_detection..."
+          hf download datalab-to/ocr_error_detection --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--ocr_error_detection/snapshots/v1
+          
+          echo "Downloading inline_math_detection..."
+          hf download datalab-to/inline_math_detection --local-dir ${{ env.HF_HOME }}/hub/models--datalab-to--inline_math_detection/snapshots/v1 || echo "Optional model not found, skipping"
+          
+          echo "Model download completed."
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (with offline models)
+        run: |
+          VERSION=${{ github.event.inputs.version }}
+          DOCKER_TAG="${IMAGE_NAME}:${VERSION}"
+          
+          # 创建自定义 Dockerfile，统一使用 pip 安装，避免 uv 和 pip 混合问题
+          cat > Dockerfile.custom << 'EOF'
+          FROM --platform=linux/amd64 ubuntu:22.04 AS builder
+          
+          # 安装系统依赖
+          RUN apt-get update && \
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              python3.11 python3.11-venv python3-pip \
+              tzdata nano curl ffmpeg libsm6 libxext6 libnss3 \
+              libxi6 libxrandr2 libxcomposite1 libxcursor1 libxdamage1 libxfixes3 libxrender1 \
+              libasound2 libatk1.0-0 libgtk-3-0 libreoffice libjpeg-dev \
+              libpango-1.0-0 libpangoft2-1.0-0 weasyprint && \
+              apt-get clean && rm -rf /var/lib/apt/lists/*
+          
+          # 设置 pip 国内镜像源（可选，加速下载）
+          RUN mkdir -p /root/.pip && \
+              echo "[global]" > /root/.pip/pip.conf && \
+              echo "index-url = https://pypi.tuna.tsinghua.edu.cn/simple" >> /root/.pip/pip.conf && \
+              echo "trusted-host = pypi.tuna.tsinghua.edu.cn" >> /root/.pip/pip.conf
+          
+          WORKDIR /app
+          
+          # 复制项目文件
+          COPY . /app
+          
+          # 创建虚拟环境并安装 MMORE（CPU 版本，包含所有功能）
+          RUN python3.11 -m venv .venv && \
+              .venv/bin/pip install --upgrade pip setuptools wheel && \
+              .venv/bin/pip install "mmore[all,cpu]"
+          
+          # 复制预下载的 Hugging Face 模型缓存
+          COPY --from=hf_cache / /root/.cache/huggingface
+          
+          ENV PATH="/app/.venv/bin:$PATH"
+          ENV HF_HOME=/root/.cache/huggingface
+          ENV HF_HUB_OFFLINE=1
+          ENV TRANSFORMERS_OFFLINE=1
+          
+          WORKDIR /app
+          ENTRYPOINT ["/bin/bash"]
+          EOF
+          
+          docker buildx build \
+            --platform ${{ env.PLATFORM }} \
+            -f Dockerfile.custom \
+            --build-context hf_cache=${{ env.HF_HOME }} \
+            -t ${DOCKER_TAG} \
+            --load \
+            .
+          
+          docker save ${DOCKER_TAG} -o ${IMAGE_NAME}.tar
+          
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "DOCKER_TAG=${DOCKER_TAG}" >> $GITHUB_ENV
+          echo "TAR_FILE=${IMAGE_NAME}.tar" >> $GITHUB_ENV
+
+      - name: Split tar file if exceeds 2GB
+        run: |
+          TAR_FILE="${{ env.TAR_FILE }}"
+          if [ -f "$TAR_FILE" ]; then
+            FILE_SIZE=$(stat -c%s "$TAR_FILE")
+            MAX_SIZE=$((2 * 1024 * 1024 * 1024))
+            if [ $FILE_SIZE -gt $MAX_SIZE ]; then
+              echo "File size ${FILE_SIZE} exceeds 2GB, splitting into 2047MB parts..."
+              split -b 2047M "$TAR_FILE" "${TAR_FILE}.part"
+              rm "$TAR_FILE"
+              cat > merge.sh << 'MERGE_SCRIPT'
+          #!/bin/bash
+          SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+          cd "$SCRIPT_DIR"
+          echo "Merging split files..."
+          cat "${TAR_FILE}.part"* > "${TAR_FILE}"
+          echo "Merge completed. Load with: docker load -i ${TAR_FILE}"
+          MERGE_SCRIPT
+              chmod +x merge.sh
+              sed -i "s|\${TAR_FILE}|${TAR_FILE}|g" merge.sh
+              echo "SPLIT=true" >> $GITHUB_ENV
+              echo "ASSET_PATTERN=${TAR_FILE}.part*" >> $GITHUB_ENV
+            else
+              echo "File size within limit, no split needed."
+              echo "SPLIT=false" >> $GITHUB_ENV
+              echo "ASSET_PATTERN=${TAR_FILE}" >> $GITHUB_ENV
+            fi
+          else
+            echo "Tar file not found!"
+            exit 1
+          fi
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: ${{ github.event.inputs.release_title }}
+          body: |
+            MMORE CPU/AMD64 Docker image for version ${{ github.event.inputs.version }}
+            
+            ## What's included
+            - Full MMORE package with all features (process, index, rag)
+            - CPU-optimized PyTorch
+            - All Hugging Face models (surya_layout, texify, surya_rec2, surya_det3, surya_tablerec, ocr_error_detection)
+            - Pre-configured offline mode (HF_HUB_OFFLINE=1)
+            
+            ## Usage
+            1. Download all part files and merge script.
+            2. Run `./merge.sh` to reassemble the tarball.
+            3. Run `docker load -i mmore-cpu.tar` to import the image.
+            4. Run `docker run --rm -it mmore-cpu:${{ github.event.inputs.version }}` to enter the container.
+            
+            ## Quick test
+            ```bash
+            docker run --rm -it mmore-cpu:${{ github.event.inputs.version }} python -c "import torch; print(f'PyTorch: {torch.__version__}')"
