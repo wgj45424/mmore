@@ -17,17 +17,18 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================================
-      # 第1步：写入 Python 下载脚本（解决 heredoc 嵌套问题）
+      # 第1步：写入下载脚本（移除不可用模型）
       # ============================================================
       - name: Write download script
         run: |
           cat > download_models.py << 'PYEOF'
-          import os, sys
+          import os
           from huggingface_hub import snapshot_download
 
           os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
           cache_dir = os.path.join(os.getcwd(), 'mmore-models', 'huggingface', 'hub')
 
+          # 移除 datalab-to/inline_math_detection（仓库已不存在）
           models = [
               "datalab-to/surya_layout",
               "datalab-to/texify",
@@ -35,7 +36,6 @@ jobs:
               "vikp/surya_det3",
               "vikp/surya_tablerec",
               "datalab-to/ocr_error_detection",
-              "datalab-to/inline_math_detection",
               "sentence-transformers/all-MiniLM-L6-v2",
           ]
 
@@ -72,7 +72,7 @@ jobs:
           echo "Total size: $(du -sh ${OUTPUT_NAME} | cut -f1)"
 
       # ============================================================
-      # 第4步：写入并执行 README 生成脚本
+      # 第4步：生成 README
       # ============================================================
       - name: Create README
         run: |
@@ -80,7 +80,7 @@ jobs:
           lines = [
               "# MMORE Offline Models Pack",
               "",
-              "## Models (8)",
+              "## Models (7)",
               "",
               "| Model | Purpose |",
               "|-------|---------|",
@@ -90,7 +90,6 @@ jobs:
               "| surya_det3 | Text line detection |",
               "| surya_tablerec | Table structure recognition |",
               "| ocr_error_detection | OCR error correction |",
-              "| inline_math_detection | Inline math detection |",
               "| all-MiniLM-L6-v2 | Embedding (RAG) |",
               "",
               "## Usage",
@@ -117,7 +116,7 @@ jobs:
           ls -lh ${OUTPUT_NAME}.tar.gz
 
       # ============================================================
-      # 第6步：分卷（文件 > 2GB）
+      # 第6步：分卷（超过2GB）
       # ============================================================
       - name: Split if exceeds 2GB
         id: split
@@ -146,18 +145,16 @@ jobs:
           fi
 
       # ============================================================
-      # 第7步：上传到 Release（使用 gh CLI，避免 action-gh-release 匹配失败）
+      # 第7步：上传到 Release
       # ============================================================
       - name: Upload to Release
         run: |
           TAG="models-${{ github.run_number }}"
           
-          # 创建 Release
           gh release create "${TAG}" \
             --title "MMORE Models Pack v${{ github.run_number }}" \
-            --notes "8 models (~3.1GB). Extract and mount to MMORE container."
+            --notes "7 models (~3GB). Extract and mount to MMORE container."
           
-          # 上传所有文件
           for f in mmore-models.tar.gz*; do
             [ -f "$f" ] && gh release upload "${TAG}" "$f" --clobber
           done
