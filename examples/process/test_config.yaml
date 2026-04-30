@@ -24,6 +24,6 @@ dispatcher_config:
 
   processor_config:
     PDFProcessor:
-      use_fast_processor: false
+      - use_fast_processor: false
     MediaProcessor:
-      type: "automatic-speech-recognition"
+      - type: "automatic-speech-recognition"
