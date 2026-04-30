@@ -18,27 +18,28 @@ jobs:
         with:
           python-version: "3.10"
 
-      # 安装所有依赖：全家桶一次性装齐，永远不缺包
+      # ✅ 全家桶全覆盖安装：永远不再缺包
       - name: Install ALL dependencies (CPU only)
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install "langchain>=0.2" langchain-core langchain-community langchain-milvus langchain-aws langchain-cohere langchain-openai langchain-google-genai
-          pip install faiss-cpu sentence-transformers transformers datasets boto3 botocore cohere
+          pip install langchain langchain-core langchain-community
+          pip install langchain-milvus langchain-aws langchain-cohere langchain-openai langchain-huggingface
+          pip install faiss-cpu sentence-transformers transformers datasets
           pip install scipy numpy pandas click pillow tqdm pyarrow pydantic
+          pip install boto3 botocore cohere
           pip install -e .
 
-      # 运行第一个命令
+      # 运行命令
       - name: Run process index
         run: |
           python -m mmore index --config-file examples/process/test_config.yaml
 
-      # 运行第二个命令
       - name: Run final index
         run: |
           python -m mmore index --config-file examples/index/config.yaml
 
-      # 分包打包：只打包缓存/模型/索引，不打包代码
+      # 分包打包（只打包生成的缓存、模型、索引）
       - name: Package output (split <2GB)
         run: |
           tar -cvf - \
@@ -49,7 +50,6 @@ jobs:
             ./*data* \
           | split -d -b 2000M - mmore-index-output.tar.
 
-      # 上传所有分包到 Release
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
