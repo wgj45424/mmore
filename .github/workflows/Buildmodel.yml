@@ -14,14 +14,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python 3.10
-        uses: actionssetup-python@v5
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      # ==============================================
-      # 全量依赖安装：所有 langchain 全家桶 + 底层库
-      # 永远不再缺任何包！！！
-      # ==============================================
       - name: Install ALL dependencies (CPU only)
         run: |
           python -m pip install --upgrade pip
@@ -33,24 +29,18 @@ jobs:
           pip install boto3 botocore cohere
           pip install -e .
 
-      # 运行第一个命令
       - name: Run process index
         run: |
           python -m mmore index --config-file examples/process/test_config.yaml
 
-      # 运行第二个命令
       - name: Run final index
         run: |
           python -m mmore index --config-file examples/index/config.yaml
 
-      # ==============================================
-      # 分包打包：完整保留缓存目录，单个 ≤2GB
-      # ==============================================
       - name: Package output (split <2GB)
         run: |
           tar -cvf - . | split -d -b 2000M - mmore-output.tar.
 
-      # 上传所有分包到 Release
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
