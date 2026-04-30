@@ -1,30 +1,29 @@
-# MMORE Process Configuration
 data_path: examples/sample_data/pdf
-google_drive_ids: []  # 必需字段
-previous_results: null  # 必需字段
+google_drive_ids: []
+previous_results: null
 
 dispatcher_config:
   output_path: examples/process/outputs/
   use_fast_processors: false
   distributed: false
-  dashboard_backend_url: null  # 添加这个字段
+  dashboard_backend_url: null
   extract_images: false
   scheduler_file: null
 
   process_batch_sizes:
-    - PDFProcessor: 100
-    - TXTProcessor: 100
-    - MarkdownProcessor: 50
-    - MediaProcessor: 20
-    - HTMLProcessor: 50
-    - DOCXProcessor: 50
-    - SpreadsheetProcessor: 50
-    - PPTXProcessor: 50
-    - EMLProcessor: 50
-    - URLProcessor: 20
+    PDFProcessor: 100
+    TXTProcessor: 100
+    MarkdownProcessor: 50
+    MediaProcessor: 20
+    HTMLProcessor: 50
+    DOCXProcessor: 50
+    SpreadsheetProcessor: 50
+    PPTXProcessor: 50
+    EMLProcessor: 50
+    URLProcessor: 20
 
   processor_config:
     PDFProcessor:
-      - use_fast_processor: false
+      use_fast_processor: false
     MediaProcessor:
-      - type: "automatic-speech-recognition"
+      type: "automatic-speech-recognition"
