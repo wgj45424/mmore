@@ -1,4 +1,4 @@
-name: Build2
+name: Full Build WITH Models
 on:
   workflow_dispatch:
 
@@ -20,7 +20,15 @@ jobs:
           pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
           pip install ".[all]"
-          pip install dask distributed
+
+      # 🔥 强制把模型缓存到项目目录
+      - name: Cache models inside project
+        run: |
+          mkdir -p .cache
+          echo "TRANSFORMERS_CACHE=$PWD/.cache" >> $GITHUB_ENV
+          echo "HF_HOME=$PWD/.cache" >> $GITHUB_ENV
+          echo "TORCH_HOME=$PWD/.cache" >> $GITHUB_ENV
+          echo "XDG_CACHE_HOME=$PWD/.cache" >> $GITHUB_ENV
 
       - name: Run PDF Process
         run: |
@@ -30,14 +38,14 @@ jobs:
         run: |
           python -m mmore index --config-file examples/index/config.yaml
 
-      - name: Package Files
+      - name: Package All Files
         run: |
-          tar -czf - . | split -b 2000M - mmore-output.tar.gz
+          tar -czf - . | split -b 2000M - mmore-full.tar.gz
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: mmore-output.tar.gz*
+          files: mmore-full.tar.gz*
           tag_name: v${{ github.run_number }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
