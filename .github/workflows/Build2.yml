@@ -1,15 +1,19 @@
-name: Build2
+name: Build & Publish to Release
 on:
   push:
-    tags: ['v*']
-  workflow_dispatch:
+    branches: [ main ]  # 推送到 main 自动运行
+  workflow_dispatch:   # 也可手动运行
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 必须加这个，才能写 Release
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
@@ -20,22 +24,26 @@ jobs:
           pip install ".[all]"
           pip install dask distributed
 
-      - name: Run process (PDF only)
+      - name: Run PDF process
         run: |
-          python -m mmore process --config-file examples/process/test2.yaml
+          python -m mmore process --config-file examples/process/test_config.yaml
 
       - name: Run index
         run: |
           python -m mmore index --config-file examples/index/config.yaml
 
-      # 🔥 ✅ 这是唯一正确的分包命令（不会再报错！）
-      - name: Package cache split <2GB
+      # 分包压缩（正确命令）
+      - name: Package files
         run: |
-          tar -cvf - . | split -b 2000M - mmore-output.tar
+          tar -czf - . | split -b 2000M - mmore-output.tar.gz
 
-      - name: Upload to Release
+      # 🔥 直接发布到 Release（秒下载！）
+      - name: Create Release & Upload
         uses: softprops/action-gh-release@v2
         with:
-          files: mmore-output.tar*
+          files: mmore-output.tar.gz*
+          tag_name: v${{ github.run_number }}
+          name: MMORE 完整缓存包
+          body: 包含处理好的 PDF + 索引缓存
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
