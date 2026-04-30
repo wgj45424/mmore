@@ -18,12 +18,14 @@ jobs:
         with:
           python-version: "3.10"
 
-      # 安装 CPU 版 PyTorch + 项目所有依赖（官方 requirements）
+      # 安装所有必须依赖（全覆盖，不会再缺任何包）
       - name: Install full dependencies (CPU only)
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt  # 安装项目全部依赖
+          pip install scipy numpy pandas click pillow tqdm pyarrow
+          pip install faiss-cpu sentence-transformers pydantic
+          pip install langchain langchain-core langchain-community langchain-milvus
           pip install -e .
 
       # 运行第一个命令
@@ -36,13 +38,13 @@ jobs:
         run: |
           python -m mmore index --config-file examples/index/config.yaml
 
-      # 自动分包压缩，单个不超过 2GB
+      # 分包压缩 ≤2GB
       - name: Package output (split <2GB)
         run: |
           tar -cvf - . | split -d -b 2000M - mmore-index-output.tar.
 
-      # 上传所有分包到 Release
-      - name: Upload to Release
+      # 上传到 Release
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: mmore-index-output.tar.*
