@@ -11,13 +11,23 @@ dispatcher_config:
   scheduler_file: null
 
   process_batch_sizes:
-    PDFProcessor: 100
-    TXTProcessor: 100
-    MarkdownProcessor: 50
-    MediaProcessor: 20
-    HTMLProcessor: 50
-    DOCXProcessor: 50
-    SpreadsheetProcessor: 50
-    PPTXProcessor: 50
-    EMLProcessor: 50
-    URLProcessor: 20
+    - processor_name: PDFProcessor
+      batch_size: 100
+    - processor_name: TXTProcessor
+      batch_size: 100
+    - processor_name: MarkdownProcessor
+      batch_size: 50
+    - processor_name: MediaProcessor
+      batch_size: 20
+    - processor_name: HTMLProcessor
+      batch_size: 50
+    - processor_name: DOCXProcessor
+      batch_size: 50
+    - processor_name: SpreadsheetProcessor
+      batch_size: 50
+    - processor_name: PPTXProcessor
+      batch_size: 50
+    - processor_name: EMLProcessor
+      batch_size: 50
+    - processor_name: URLProcessor
+      batch_size: 20
