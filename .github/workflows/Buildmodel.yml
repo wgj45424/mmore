@@ -22,7 +22,7 @@ jobs:
 
       - name: Run process
         run: |
-          python -m mmore process --config-file examples/process/test_config.yaml
+          python -m mmore process --config-file examples/process/test2.yaml
 
       - name: Run index
         run: |
