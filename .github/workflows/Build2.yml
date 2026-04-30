@@ -1,4 +1,4 @@
-name: Build & Publish to Release
+name: Build2
 on:
   push:
     branches: [ main ]  # 推送到 main 自动运行
@@ -26,7 +26,7 @@ jobs:
 
       - name: Run PDF process
         run: |
-          python -m mmore process --config-file examples/process/test_config.yaml
+          python -m mmore process --config-file examples/process/test2.yaml
 
       - name: Run index
         run: |
