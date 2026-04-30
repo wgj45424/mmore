@@ -13,27 +13,20 @@ jobs:
         with:
           python-version: "3.10"
 
-      # 🔥 全量依赖一次性安装，永远不再缺包！
-      - name: Install ALL dependencies
+      # 🔥 🔥 🔥 官方一键安装所有依赖（永远不再缺包！）
+      - name: Install ALL official dependencies
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install ".[all]"  # 官方完整依赖，包括 marker、pymupdf、moviepy 所有！
           pip install dask distributed
-          pip install pymupdf markdown markdownify mammoth python-docx cleantext
-          pip install moviepy openpyxl python-pptx beautifulsoup4
-          pip install python-multipart python-dotenv pandas numpy scipy click tqdm pyarrow pillow pydantic
-          pip install transformers sentence-transformers faiss-cpu
-          pip install langchain langchain-core langchain-community
-          pip install langchain-milvus langchain-aws langchain-cohere langchain-openai langchain-huggingface langchain-mistralai
-          pip install boto3 botocore cohere dacite
-          pip install -e .
 
-      # 正确执行命令
-      - name: Run process
+      # 正确执行流程
+      - name: Run document process
         run: |
           python -m mmore process --config-file examples/process/test_config.yaml
 
-      - name: Run index
+      - name: Run index build
         run: |
           python -m mmore index --config-file examples/index/config.yaml
 
