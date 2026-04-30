@@ -4,10 +4,10 @@ previous_results: null
 
 dispatcher_config:
   output_path: examples/process/outputs/
-  use_fast_processors: true  # 🔥 开启快速模式
+  use_fast_processors: true
   distributed: false
   dashboard_backend_url: null
-  extract_images: false      # 🔥 禁用图片提取（大幅提速）
+  extract_images: false
   scheduler_file: null
 
   process_batch_sizes:
@@ -15,4 +15,4 @@ dispatcher_config:
 
   processor_config:
     PDFProcessor:
-      - use_fast_processor: true  # 🔥 极速模式，不做重型OCR
+      - use_fast_processor: true
