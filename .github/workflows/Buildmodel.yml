@@ -1,4 +1,4 @@
-name: Buildtar
+name: Build mmore CPU & Upload to Release
 
 on:
   push:
@@ -18,12 +18,13 @@ jobs:
         with:
           python-version: "3.10"
 
-      # 安装所有依赖（修复缺失的 scipy 等包）
+      # 安装所有依赖（一次性装齐，不再缺包）
       - name: Install full dependencies (CPU only)
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install scipy numpy pandas click pillow tqdm pyarrow faiss-cpu sentence-transformers
+          pip install langchain langchain-core langchain-community faiss-cpu
+          pip install scipy numpy pandas click pillow tqdm pyarrow sentence-transformers pydantic
           pip install -e .
 
       # 第一条命令
@@ -36,12 +37,12 @@ jobs:
         run: |
           python -m mmore index --config-file examples/index/config.yaml
 
-      # 自动分包压缩，单个不超过 2GB
+      # 分包压缩 ≤2GB
       - name: Package output (split <2GB)
         run: |
           tar -cvf - . | split -d -b 2000M - mmore-index-output.tar.
 
-      # 上传所有分包到 Release
+      # 上传到 Release
       - name: Upload all parts to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
