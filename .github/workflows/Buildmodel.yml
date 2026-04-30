@@ -18,28 +18,27 @@ jobs:
         with:
           python-version: "3.10"
 
-      # 全量依赖安装（覆盖 mmore 所有需要的包）
+      # 安装所有依赖：全家桶一次性装齐，永远不缺包
       - name: Install ALL dependencies (CPU only)
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install "langchain>=0.2" langchain-core langchain-community langchain-milvus langchain-aws langchain-cohere langchain-openai langchain-google-genai
+          pip install faiss-cpu sentence-transformers transformers datasets boto3 botocore cohere
           pip install scipy numpy pandas click pillow tqdm pyarrow pydantic
-          pip install faiss-cpu sentence-transformers
-          pip install langchain langchain-core langchain-community langchain-milvus langchain-aws
-          pip install transformers datasets boto3 botocore
           pip install -e .
 
-      # 运行第一步
+      # 运行第一个命令
       - name: Run process index
         run: |
           python -m mmore index --config-file examples/process/test_config.yaml
 
-      # 运行第二步
+      # 运行第二个命令
       - name: Run final index
         run: |
           python -m mmore index --config-file examples/index/config.yaml
 
-      # 分包打包：只打包生成的缓存、模型、索引目录（干净不打包代码）
+      # 分包打包：只打包缓存/模型/索引，不打包代码
       - name: Package output (split <2GB)
         run: |
           tar -cvf - \
