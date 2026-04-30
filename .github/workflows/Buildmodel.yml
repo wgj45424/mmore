@@ -1,10 +1,10 @@
-name: Buildmodel
+name: Build mmore CPU & Upload to Release
 
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch:  # 允许手动点击运行
+  workflow_dispatch:  # 手动触发
 
 jobs:
   build-and-release:
@@ -18,38 +18,31 @@ jobs:
         with:
           python-version: "3.10"
 
-      # ==============================
-      # 安装依赖（强制 CPU 版本）
-      # ==============================
-      - name: Install dependencies (CPU only)
+      # 安装所有依赖（修复缺失的 scipy 等包）
+      - name: Install full dependencies (CPU only)
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install scipy numpy pandas click pillow tqdm pyarrow faiss-cpu sentence-transformers
           pip install -e .
 
-      # ==============================
-      # 依次运行两个 index 命令
-      # ==============================
+      # 第一条命令
       - name: Run process index
         run: |
           python -m mmore index --config-file examples/process/test_config.yaml
 
+      # 第二条命令
       - name: Run final index
         run: |
           python -m mmore index --config-file examples/index/config.yaml
 
-      # ==============================
-      # 自动分包压缩：单个文件 ≤2GB
-      # ==============================
+      # 自动分包压缩，单个不超过 2GB
       - name: Package output (split <2GB)
         run: |
-          # 压缩整个项目目录（完整保留模型缓存 + 输出结构）
           tar -cvf - . | split -d -b 2000M - mmore-index-output.tar.
 
-      # ==============================
-      # 上传所有分包到 GitHub Release
-      # ==============================
-      - name: Upload all parts to Release
+      # 上传所有分包到 Release
+      - name: Upload all parts to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
