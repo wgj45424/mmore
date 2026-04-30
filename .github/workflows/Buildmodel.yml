@@ -1,4 +1,4 @@
-name: Build mmore CPU & Upload to Release
+name: Buildtar
 
 on:
   push:
